@@ -1,0 +1,28 @@
+schema: spec-driven
+
+context: |
+  Product: Newzsnac, a personal local-first information reader
+  Sources: RSS/Atom, Hacker News, Bluesky, and Zenn
+  Storage: SQLite is the system of record
+  Collection: Deterministic scheduled scripts fetch and normalize source data
+  Local AI: LM Studio with Qwen performs Japanese summaries, translation, labeling, and priority assessment
+  Control: OpenClaw may invoke validated application commands but does not write SQLite directly
+  Reading: Desktop-first, keyboard-driven continuous reading with stable sessions and low-latency navigation
+  Recommendations: Sources may be suggested from article links, authors, topics, and followed accounts, but are never subscribed automatically
+  Exclusions: X integration and trial subscriptions are outside the current scope
+  Tooling: mise manages Node.js and CLI tools with a 14-day minimum release age and committed lockfiles
+  Language: Write OpenSpec artifacts in Japanese while preserving normative keywords such as MUST and SHALL
+
+rules:
+  proposal:
+    - State non-goals explicitly
+  specs:
+    - Separate deterministic system behavior from model-generated judgments
+    - Give every requirement at least one observable scenario
+    - Do not require network access for reading already collected items
+  design:
+    - Record failure behavior for collectors and LM Studio separately
+    - Preserve the reading interface when background processing is unavailable
+  tasks:
+    - Include verification work in each implementation area
+    - Keep collection, analysis, storage, and presentation tasks separable

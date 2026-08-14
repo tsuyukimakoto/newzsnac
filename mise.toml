@@ -1,0 +1,12 @@
+[settings]
+lockfile = true
+minimum_release_age = "14d"
+
+[tools]
+"npm:npm" = "11"
+node = "lts"
+"npm:@fission-ai/openspec" = "latest"
+
+[tasks."spec:validate"]
+description = "Validate all OpenSpec specifications and changes"
+run = "openspec validate --all"
