@@ -165,7 +165,9 @@ export class ApplicationOperations {
         sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN coalesce(i.estimated_reading_minutes, 5) ELSE 0 END) AS reading_minutes
       FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
       LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
-    `).get(this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion);
+        AND r.score >= ?
+    `).get(this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion,
+      this.config.recommendationSimilarityThreshold);
     return {
       total: Number(row?.total ?? 0),
       unread: Number(row?.unread ?? 0),
@@ -194,9 +196,14 @@ export class ApplicationOperations {
     const embeddingCounts = this.database.prepare(`
       SELECT count(*) AS embedded,
         (SELECT count(*) FROM jobs WHERE type = 'embedding' AND status IN ('pending','running','retry_wait')) AS pending,
-        (SELECT count(*) FROM item_recommendations WHERE model_id = ? AND input_version = ?) AS recommendations
+        (SELECT count(*) FROM item_recommendations r
+          JOIN items i ON i.id = r.target_item_id
+          LEFT JOIN item_user_states u ON u.item_id = i.id
+          WHERE r.model_id = ? AND r.input_version = ? AND r.score >= ?
+            AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL) AS recommendations
       FROM item_embeddings WHERE model_id = ? AND input_version = ?
     `).get(this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion,
+      this.config.recommendationSimilarityThreshold,
       this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion);
     try {
       const models = await listLocalModels(this.config.lmStudioUrl, this.fetcher);
@@ -283,7 +290,8 @@ export function createApplicationOperations(database: DatabaseSync, config: AppC
   const chat = new ArticleChatService(database, new LmStudioClient(config.lmStudioUrl, fetcher), config.chatContextMaxCharacters);
   return new ApplicationOperations(
     database, resolver, sources, new DiscoveryService(database, resolver, sources),
-    new ReadingService(database, config.embeddingModel ?? "__disabled__", config.embeddingInputVersion),
+    new ReadingService(database, config.embeddingModel ?? "__disabled__", config.embeddingInputVersion,
+      config.recommendationSimilarityThreshold),
     new EnrichmentService(database), recommendations, chat, config, fetcher,
   );
 }

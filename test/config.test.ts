@@ -11,7 +11,7 @@ test("loadConfig returns local-first defaults", () => {
   assert.equal(config.embeddingModel, null);
   assert.equal(config.embeddingMaxCharacters, 12_000);
   assert.equal(config.embeddingInputVersion, "embedding-v1");
-  assert.equal(config.recommendationSimilarityThreshold, 0.75);
+  assert.equal(config.recommendationSimilarityThreshold, 0.86);
   assert.equal(config.analysisPromptVersion, "analysis-v1");
   assert.equal(config.translationPromptVersion, "translate-v1");
   assert.equal(config.chatContextMaxCharacters, 24_000);

@@ -263,7 +263,7 @@ export class RecommendationService {
       const score = cosineSimilarity(source, target);
       if (!best || score > best.score || (score === best.score && sourceId < best.sourceId)) best = { sourceId, score };
     }
-    if (!best || best.score < this.config.recommendationSimilarityThreshold) {
+    if (!best) {
       this.database.prepare("DELETE FROM item_recommendations WHERE target_item_id = ?").run(targetId);
       return;
     }

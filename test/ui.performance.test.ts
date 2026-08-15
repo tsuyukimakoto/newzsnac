@@ -51,7 +51,8 @@ test("incremental recommendation and a recommended view stay below 50ms with 10,
       payload: { targetItemId: 10_000 }, attempts: 1, maxAttempts: 5 });
     const recommendationDuration = performance.now() - startedRecommendation;
 
-    const reading = new ReadingService(database, "embed-model", "embedding-v1");
+    const reading = new ReadingService(database, "embed-model", "embedding-v1",
+      config.recommendationSimilarityThreshold);
     const startedList = performance.now();
     const result = reading.list({ recommended: true });
     const listDuration = performance.now() - startedList;

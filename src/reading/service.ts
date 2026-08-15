@@ -87,6 +87,7 @@ export class ReadingService {
     private readonly database: DatabaseSync,
     private readonly recommendationModel = "__disabled__",
     private readonly embeddingInputVersion = "__disabled__",
+    private readonly recommendationSimilarityThreshold = 0.86,
   ) {}
 
   setRead(itemId: number, read: boolean, now = new Date()): void {
@@ -130,12 +131,14 @@ export class ReadingService {
       LEFT JOIN source_items si ON si.item_id = i.id
       LEFT JOIN sources s ON s.id = si.source_id
       LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
+        AND r.score >= ?
         AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
       LEFT JOIN items ri ON ri.id = r.source_item_id
       WHERE ${conditions.join(" AND ")}
       GROUP BY i.id
       ORDER BY ${options.recommended ? "r.score DESC, i.published_at DESC, i.id DESC" : order}
-    `).all(this.recommendationModel, this.embeddingInputVersion, baseline, baseline, sourceId, sourceId,
+    `).all(this.recommendationModel, this.embeddingInputVersion, this.recommendationSimilarityThreshold,
+      baseline, baseline, sourceId, sourceId,
       Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false)) as unknown as ArticleRow[];
     const articles = rows.map(mapArticle);
     if (options.timeBudgetMinutes === undefined) return articles;
@@ -174,11 +177,13 @@ export class ReadingService {
       LEFT JOIN source_items si ON si.item_id = i.id
       LEFT JOIN sources s ON s.id = si.source_id
       LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
+        AND r.score >= ?
         AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
       LEFT JOIN items ri ON ri.id = r.source_item_id
       WHERE (? = 0 OR coalesce(u.is_read, 0) = 0)
       GROUP BY i.id ORDER BY i.id DESC
-    `).all(query, this.recommendationModel, this.embeddingInputVersion, Number(options.unread ?? false)) as unknown as ArticleRow[];
+    `).all(query, this.recommendationModel, this.embeddingInputVersion,
+      this.recommendationSimilarityThreshold, Number(options.unread ?? false)) as unknown as ArticleRow[];
     return rows.map(mapArticle);
   }
 

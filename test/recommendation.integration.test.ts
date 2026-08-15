@@ -5,6 +5,7 @@ import { openDatabase } from "../src/db/database.js";
 import { EnrichmentWorker } from "../src/enrichment/service.js";
 import { LmStudioClient } from "../src/enrichment/client.js";
 import { ReadingService } from "../src/reading/service.js";
+import { createApplicationOperations } from "../src/application/operations.js";
 import {
   blobToVector, buildEmbeddingInput, cosineSimilarity, RecommendationService,
   vectorNorm, vectorToBlob,
@@ -57,7 +58,8 @@ test("explicit interest incrementally creates and removes explainable recommenda
       NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD: "0.8",
     });
     const recommendations = new RecommendationService(database, config);
-    const reading = new ReadingService(database, "embed-model", config.embeddingInputVersion);
+    const reading = new ReadingService(database, "embed-model", config.embeddingInputVersion,
+      config.recommendationSimilarityThreshold);
     const client = new LmStudioClient(config.lmStudioUrl, async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { input: string };
       const vector = body.input.includes("Cooking") ? [0, 1] : body.input.includes("implementation") ? [0.98, 0.2] : [1, 0];
@@ -77,6 +79,8 @@ test("explicit interest incrementally creates and removes explainable recommenda
     assert.equal(recommended[0]?.recommendation?.sourceItemId, 1);
     assert.equal(recommended[0]?.recommendation?.sourceTitle, "Local AI architecture");
     assert.ok((recommended[0]?.recommendation?.score ?? 0) > 0.9);
+    assert.equal(database.prepare("SELECT count(*) AS count FROM item_recommendations").get()?.count, 2);
+    assert.equal(database.prepare("SELECT score FROM item_recommendations WHERE target_item_id = 3").get()?.score, 0);
     assert.equal(reading.list({ interested: true })[0]?.id, 1);
 
     reading.setInterest(1, null);
@@ -88,6 +92,41 @@ test("explicit interest incrementally creates and removes explainable recommenda
     assert.equal(source?.isSaved, true);
     assert.equal(source?.isRead, true);
     assert.equal(source?.interest, null);
+  } finally { database.close(); }
+});
+
+test("reading and dashboard apply the current threshold to persisted recommendations", async () => {
+  const database = openDatabase(":memory:");
+  try {
+    for (let id = 1; id <= 6; id += 1) insertItem(database, id, `Article ${id}`);
+    const now = "2026-08-15T00:00:00Z";
+    database.prepare("INSERT INTO item_user_states(item_id, interest, updated_at) VALUES (1, 'interested', ?)").run(now);
+    const insertRecommendation = database.prepare(`
+      INSERT INTO item_recommendations(target_item_id, source_item_id, score, model_id, input_version, calculated_at)
+      VALUES (?, 1, ?, 'embed-model', 'embedding-v1', ?)
+    `);
+    const savedRecommendations: ReadonlyArray<readonly [number, number]> =
+      [[2, 0.9], [3, 0.88], [4, 0.87], [5, 0.86], [6, 0.85]];
+    savedRecommendations.forEach(([id, score]) =>
+      insertRecommendation.run(id, score, now));
+    const config = loadConfig({
+      NEWSZNAC_EMBEDDING_MODEL: "embed-model",
+      NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD: "0.86",
+    });
+    const reading = new ReadingService(database, "embed-model", "embedding-v1",
+      config.recommendationSimilarityThreshold);
+    assert.deepEqual(reading.list({ recommended: true }).map((item) => item.id), [2, 3, 4, 5]);
+    assert.deepEqual(reading.list().filter((item) => item.recommendation).map((item) => item.id).sort(), [2, 3, 4, 5]);
+
+    const fetcher = async (input: string | URL | Request) => {
+      if (String(input).endsWith("/models")) return Response.json({ data: [{ id: "embed-model" }] });
+      throw new Error(`unexpected request: ${String(input)}`);
+    };
+    const operations = createApplicationOperations(database, config, fetcher);
+    const summary = await operations.execute("dashboard.summary", {}, "web");
+    assert.equal(summary.ok && (summary.data as { recommended: number }).recommended, 4);
+    const runtime = await operations.execute("runtime.status", {}, "web");
+    assert.equal(runtime.ok && (runtime.data as { embedding: { recommendations: number } }).embedding.recommendations, 4);
   } finally { database.close(); }
 });
 

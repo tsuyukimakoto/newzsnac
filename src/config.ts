@@ -98,7 +98,7 @@ export function loadConfig(
     embeddingModel: optionalNonEmpty(environment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
     embeddingMaxCharacters: integerInRange(environment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, 12_000, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
     embeddingInputVersion: nonEmpty(environment.NEWSZNAC_EMBEDDING_INPUT_VERSION, "embedding-v1", "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
-    recommendationSimilarityThreshold: numberInRange(environment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, 0.75, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
+    recommendationSimilarityThreshold: numberInRange(environment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, 0.86, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
     analysisPromptVersion: nonEmpty(environment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, "analysis-v1", "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
     translationPromptVersion: nonEmpty(environment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, "translate-v1", "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
     chatContextMaxCharacters: integerInRange(environment.NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS, 24_000, "NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS", 1_000, 100_000),

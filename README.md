@@ -50,7 +50,7 @@ NEWSZNAC_LM_STUDIO_MODEL='実際のモデルID' npm start
 NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' npm start
 ```
 
-初回起動後は新しい記事から順に背景でベクトル化します。「気になった」記事と類似度0.75以上の未読記事が「読むべきかも？」へ現れ、根拠になった記事名と類似度を確認できます。埋め込みモデルを停止しても、収集、閲覧、検索、関心フラグの変更は継続します。再起動後に未処理ジョブが再試行されます。
+初回起動後は新しい記事から順に背景でベクトル化します。「気になった」記事と類似度0.86以上の未読記事が「読むべきかも？」へ現れ、根拠になった記事名と類似度を確認できます。記事ごとに閾値だけで判定するため、固定の表示件数や上位件数による打ち切りはありません。埋め込みモデルを停止しても、収集、閲覧、検索、関心フラグの変更は継続します。再起動後に未処理ジョブが再試行されます。
 
 閾値を調整する場合は`NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD`へ`-1`から`1`の値を指定します。モデルや入力形式を変更してベクトルを再生成する場合は、`NEWSZNAC_EMBEDDING_INPUT_VERSION`を新しい値へ変更します。旧ベクトルは保持されますが、現在のモデルと入力版の推薦だけが表示されます。
 
@@ -86,7 +86,7 @@ LM Studioが停止している場合は問答欄にエラーが表示されま�
 | `NEWSZNAC_EMBEDDING_MODEL` | 未設定 | 記事ベクトルに使うLM Studioの埋め込みモデルID |
 | `NEWSZNAC_EMBEDDING_MAX_CHARACTERS` | `12000` | 埋め込み入力へ含める最大文字数 |
 | `NEWSZNAC_EMBEDDING_INPUT_VERSION` | `embedding-v1` | 埋め込み入力形式の版。変更すると再生成 |
-| `NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD` | `0.75` | 「読むべきかも？」に表示する最低類似度 |
+| `NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD` | `0.86` | 「読むべきかも？」に表示する最低類似度 |
 | `NEWSZNAC_ANALYSIS_PROMPT_VERSION` | `analysis-v1` | 分析結果のプロンプト版 |
 | `NEWSZNAC_TRANSLATION_PROMPT_VERSION` | `translate-v1` | 翻訳結果のプロンプト版 |
 
