@@ -1,0 +1,235 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { AppConfig } from "../config.js";
+import { DiscoveryService } from "../discovery/service.js";
+import { EnrichmentService } from "../enrichment/service.js";
+import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
+import { ReadingService } from "../reading/service.js";
+import { SourceResolver, type Fetch } from "../sources/resolver.js";
+import { SourceService, type SourceSettings } from "../sources/service.js";
+
+export const operationNames = [
+  "source.resolve", "source.preview", "source.add", "source.pause", "source.resume",
+  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.translate",
+  "dashboard.summary", "runtime.status",
+] as const;
+
+export type OperationName = typeof operationNames[number];
+export type OperationCaller = "web" | "cli" | "openclaw";
+
+export type OperationResult =
+  | { readonly ok: true; readonly operation: OperationName; readonly data: unknown }
+  | { readonly ok: false; readonly operation: string; readonly error: { readonly code: string; readonly message: string } };
+
+function record(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("input must be a JSON object");
+  return value as Record<string, unknown>;
+}
+
+function text(input: Record<string, unknown>, key: string): string {
+  const value = input[key];
+  if (typeof value !== "string" || !value.trim()) throw new Error(`${key} must be a non-empty string`);
+  return value.trim();
+}
+
+function integer(input: Record<string, unknown>, key: string): number {
+  const value = input[key];
+  if (!Number.isSafeInteger(value) || Number(value) < 1) throw new Error(`${key} must be a positive integer`);
+  return Number(value);
+}
+
+const mutatingOperations = new Set<OperationName>([
+  "source.add", "source.pause", "source.resume", "candidate.dismiss",
+  "article.save", "article.read", "article.translate",
+]);
+
+export class ApplicationOperations {
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly resolver: SourceResolver,
+    private readonly sources: SourceService,
+    private readonly discovery: DiscoveryService,
+    private readonly reading: ReadingService,
+    private readonly enrichment: EnrichmentService,
+    private readonly config: AppConfig,
+    private readonly fetcher: Fetch,
+  ) {}
+
+  async execute(operation: string, rawInput: unknown, caller: OperationCaller): Promise<OperationResult> {
+    if (!operationNames.includes(operation as OperationName)) {
+      return { ok: false, operation, error: { code: "unknown_operation", message: `Unknown operation: ${operation}` } };
+    }
+    const name = operation as OperationName;
+    try {
+      const input = record(rawInput);
+      const data = await this.perform(name, input, caller);
+      return { ok: true, operation: name, data };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (mutatingOperations.has(name)) this.audit(name, targetFor(name, rawInput), caller, "error", { message });
+      return { ok: false, operation: name, error: { code: "invalid_operation", message } };
+    }
+  }
+
+  private async perform(name: OperationName, input: Record<string, unknown>, caller: OperationCaller): Promise<unknown> {
+    switch (name) {
+      case "source.resolve": return this.resolver.resolve(text(input, "input"));
+      case "source.preview": return this.sources.resolveAndPreview(text(input, "input"));
+      case "source.add": {
+        const resolved = await this.resolver.resolve(text(input, "input"));
+        return this.mutate(name, resolved.canonicalUrl, caller, () => this.sources.add(resolved, settings(input.settings)));
+      }
+      case "source.pause": {
+        const id = integer(input, "sourceId");
+        return this.mutate(name, String(id), caller, () => { this.sources.pause(id); return { sourceId: id, status: "paused" }; });
+      }
+      case "source.resume": {
+        const id = integer(input, "sourceId");
+        return this.mutate(name, String(id), caller, () => { this.sources.resume(id); return { sourceId: id, status: "active" }; });
+      }
+      case "source.list": return this.listSources();
+      case "candidate.dismiss": {
+        const id = integer(input, "candidateId");
+        return this.mutate(name, String(id), caller, () => { this.discovery.dismiss(id); return { candidateId: id, status: "dismissed" }; });
+      }
+      case "candidate.list": return this.discovery.visible();
+      case "article.list": {
+        const sourceId = optionalInteger(input, "sourceId");
+        const saved = optionalBoolean(input, "saved");
+        return this.reading.list({
+          ...(sourceId === undefined ? {} : { sourceId }),
+          ...(saved === undefined ? {} : { saved }),
+        });
+      }
+      case "article.search": return this.reading.search(text(input, "query"));
+      case "article.save": {
+        const id = integer(input, "articleId"); const saved = boolean(input, "saved");
+        return this.mutate(name, String(id), caller, () => { this.reading.setSaved(id, saved); return { articleId: id, saved }; });
+      }
+      case "article.read": {
+        const id = integer(input, "articleId"); const read = boolean(input, "read");
+        return this.mutate(name, String(id), caller, () => { this.reading.setRead(id, read); return { articleId: id, read }; });
+      }
+      case "article.translate": {
+        const id = integer(input, "articleId");
+        const modelId = optionalText(input, "modelId") ?? await this.activeModelId();
+        const promptVersion = optionalText(input, "promptVersion") ?? this.config.translationPromptVersion;
+        return this.mutate(name, String(id), caller, () => this.enrichment.requestTranslation(id, modelId, promptVersion));
+      }
+      case "dashboard.summary": return this.dashboardSummary();
+      case "runtime.status": return this.runtimeStatus();
+    }
+  }
+
+  private dashboardSummary(): { total: number; unread: number; saved: number; readingMinutes: number } {
+    const row = this.database.prepare(`
+      SELECT count(*) AS total,
+        sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
+        sum(CASE WHEN coalesce(u.is_saved, 0) = 1 THEN 1 ELSE 0 END) AS saved,
+        sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN coalesce(i.estimated_reading_minutes, 5) ELSE 0 END) AS reading_minutes
+      FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
+    `).get();
+    return {
+      total: Number(row?.total ?? 0),
+      unread: Number(row?.unread ?? 0),
+      saved: Number(row?.saved ?? 0),
+      readingMinutes: Number(row?.reading_minutes ?? 0),
+    };
+  }
+
+  private listSources(): readonly unknown[] {
+    return this.database.prepare(`
+      SELECT s.id, s.kind, s.display_name AS displayName, s.status,
+        count(si.item_id) AS total,
+        sum(CASE WHEN si.item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
+        s.last_checked_at AS lastCheckedAt, s.next_fetch_at AS nextFetchAt,
+        s.failure_count AS failureCount, s.last_error AS lastError
+      FROM sources s
+      LEFT JOIN source_items si ON si.source_id = s.id
+      LEFT JOIN item_user_states u ON u.item_id = si.item_id
+      GROUP BY s.id ORDER BY lower(s.display_name), s.id
+    `).all().map((row) => ({ ...row, id: Number(row.id), total: Number(row.total), unread: Number(row.unread) }));
+  }
+
+  private async runtimeStatus(): Promise<unknown> {
+    try {
+      const models = await listLocalModels(this.config.lmStudioUrl, this.fetcher);
+      return {
+        sqlite: "connected", lmStudio: "connected", configuredModel: this.config.lmStudioModel,
+        activeModel: selectLoadedModel(this.config.lmStudioModel, models), models,
+      };
+    } catch (error) {
+      return {
+        sqlite: "connected", lmStudio: "unavailable", configuredModel: this.config.lmStudioModel,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
+  private async activeModelId(): Promise<string> {
+    try {
+      return selectLoadedModel(this.config.lmStudioModel, await listLocalModels(this.config.lmStudioUrl, this.fetcher));
+    } catch {
+      return this.config.lmStudioModel;
+    }
+  }
+
+  private mutate<T>(operation: OperationName, target: string, caller: OperationCaller, action: () => T): T {
+    this.database.exec("BEGIN IMMEDIATE");
+    try {
+      const result = action();
+      this.audit(operation, target, caller, "success", result);
+      this.database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.database.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  private audit(operation: string, target: string, caller: OperationCaller, result: string, details: unknown): void {
+    this.database.prepare(`
+      INSERT INTO action_history(action, target_type, target_id, caller, occurred_at, result, details_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(operation, operation.split(".")[0]!, target, caller, new Date().toISOString(), result, JSON.stringify(details));
+  }
+}
+
+function boolean(input: Record<string, unknown>, key: string): boolean {
+  if (typeof input[key] !== "boolean") throw new Error(`${key} must be a boolean`);
+  return input[key];
+}
+
+function optionalInteger(input: Record<string, unknown>, key: string): number | undefined {
+  if (input[key] === undefined) return undefined;
+  return integer(input, key);
+}
+
+function optionalBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
+  if (input[key] === undefined) return undefined;
+  return boolean(input, key);
+}
+
+function optionalText(input: Record<string, unknown>, key: string): string | undefined {
+  if (input[key] === undefined) return undefined;
+  return text(input, key);
+}
+
+function settings(value: unknown): SourceSettings {
+  if (value === undefined) return {};
+  return record(value) as SourceSettings;
+}
+
+function targetFor(operation: OperationName, rawInput: unknown): string {
+  if (!rawInput || typeof rawInput !== "object") return "unknown";
+  const input = rawInput as Record<string, unknown>;
+  return String(input.sourceId ?? input.candidateId ?? input.articleId ?? input.input ?? "unknown");
+}
+
+export function createApplicationOperations(database: DatabaseSync, config: AppConfig, fetcher: Fetch = globalThis.fetch): ApplicationOperations {
+  const resolver = new SourceResolver(fetcher);
+  const sources = new SourceService(database, resolver);
+  return new ApplicationOperations(
+    database, resolver, sources, new DiscoveryService(database, resolver, sources),
+    new ReadingService(database), new EnrichmentService(database), config, fetcher,
+  );
+}

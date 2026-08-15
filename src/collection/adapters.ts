@@ -22,7 +22,13 @@ export class FeedAdapter implements CollectionAdapter {
     if (!response.ok) throw new Error(`Feed returned HTTP ${response.status}`);
     const feed = parseFeed(await response.text());
     return {
-      items: feed.items.map((item) => ({ externalId: item.url, ...item, publishedAt: item.publishedAt ?? undefined })),
+      items: feed.items.map((item) => ({
+        externalId: item.url,
+        url: item.url,
+        title: item.title,
+        publishedAt: item.publishedAt ?? undefined,
+        feedContent: item.content,
+      })),
       etag: response.headers.get("etag") ?? undefined,
       lastModified: response.headers.get("last-modified") ?? undefined,
       checkedAt: now.toISOString(),

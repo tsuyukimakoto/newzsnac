@@ -48,6 +48,7 @@ export function parseFeed(xml: string): ParsedFeed {
           title: text(item.title),
           url: text(item.link) || text(item.guid),
           publishedAt: text(item.pubDate) || text(item.date) || null,
+          content: text(item["content:encoded"]) || text(item.description) || undefined,
         };
       }).filter((item) => item.url.length > 0),
     };
@@ -63,6 +64,7 @@ export function parseFeed(xml: string): ParsedFeed {
           title: text(item.title),
           url: atomLink(item.link) || text(item.id),
           publishedAt: text(item.published) || text(item.updated) || null,
+          content: text(item.content) || text(item.summary) || undefined,
         };
       }).filter((item) => item.url.length > 0),
     };

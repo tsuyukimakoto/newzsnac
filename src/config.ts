@@ -3,6 +3,9 @@ import { isAbsolute, resolve } from "node:path";
 export interface AppConfig {
   readonly databasePath: string;
   readonly lmStudioUrl: URL;
+  readonly lmStudioModel: string;
+  readonly analysisPromptVersion: string;
+  readonly translationPromptVersion: string;
   readonly bindHost: "127.0.0.1" | "::1";
   readonly port: number;
 }
@@ -40,12 +43,20 @@ function parseLmStudioUrl(value: string | undefined): URL {
   return url;
 }
 
+function nonEmpty(value: string | undefined, fallback: string, name: string): string {
+  const actual = value ?? fallback;
+  if (!actual.trim()) throw new Error(`${name} must not be empty`);
+  return actual.trim();
+}
+
 export function loadConfig(
   environment: ConfigEnvironment = process.env,
   workingDirectory = process.cwd(),
 ): AppConfig {
   const configuredPath = environment.NEWSZNAC_DATABASE_PATH ?? "data/newzsnac.sqlite";
-  const databasePath = isAbsolute(configuredPath)
+  const databasePath = configuredPath === ":memory:"
+    ? configuredPath
+    : isAbsolute(configuredPath)
     ? configuredPath
     : resolve(workingDirectory, configuredPath);
 
@@ -56,6 +67,9 @@ export function loadConfig(
   return {
     databasePath,
     lmStudioUrl: parseLmStudioUrl(environment.NEWSZNAC_LM_STUDIO_URL),
+    lmStudioModel: nonEmpty(environment.NEWSZNAC_LM_STUDIO_MODEL, "qwen", "NEWSZNAC_LM_STUDIO_MODEL"),
+    analysisPromptVersion: nonEmpty(environment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, "analysis-v1", "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
+    translationPromptVersion: nonEmpty(environment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, "translate-v1", "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
     bindHost: parseLoopbackHost(environment.NEWSZNAC_HOST),
     port: parsePort(environment.NEWSZNAC_PORT),
   };

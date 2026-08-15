@@ -11,7 +11,7 @@ const sourceRoot = resolve(distRoot, "src");
 function run(entrypoint: string, args: readonly string[] = []) {
   return spawnSync(process.execPath, [resolve(sourceRoot, entrypoint), ...args], {
     encoding: "utf8",
-    env: { ...process.env, NEWSZNAC_PORT: "0" },
+    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: ":memory:" },
   });
 }
 
@@ -27,16 +27,19 @@ for (const worker of ["collection", "analysis"] as const) {
     const result = run(`workers/${worker}.js`);
 
     assert.equal(result.status, 0, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), {
+    const messages = result.stdout.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.deepEqual(messages[0], {
       service: `${worker}-worker`,
       status: "ready",
+      watch: false,
     });
+    if (worker === "collection") assert.equal(messages[1]?.status, "cycle-complete");
   });
 }
 
 test("web application starts on loopback and reports readiness", async (context) => {
   const child = spawn(process.execPath, [resolve(sourceRoot, "server.js")], {
-    env: { ...process.env, NEWSZNAC_PORT: "0" },
+    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: ":memory:" },
     stdio: ["ignore", "pipe", "pipe"],
   });
   context.after(() => child.kill());
@@ -53,4 +56,22 @@ test("web application starts on loopback and reports readiness", async (context)
   assert.equal(message.status, "ready");
   assert.equal(message.host, "127.0.0.1");
   assert.equal(typeof message.port, "number");
+});
+
+test("normal start supervises web, collection, and analysis processes", async () => {
+  const child = spawn(process.execPath, [resolve(sourceRoot, "main.js")], {
+    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: ":memory:" },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let output = "";
+  child.stdout.setEncoding("utf8");
+  child.stdout.on("data", (chunk: string) => { output += chunk; });
+  const deadline = Date.now() + 5_000;
+  while (!(output.includes('"service":"web"') && output.includes('"service":"collection-worker"') && output.includes('"service":"analysis-worker"'))) {
+    if (Date.now() >= deadline) throw new Error(`services were not all ready: ${output}`);
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
+  }
+  child.kill("SIGTERM");
+  const [code, signal] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
+  assert.ok(code === 0 || signal === "SIGTERM", `unexpected supervisor exit: ${String(code)} ${String(signal)}`);
 });

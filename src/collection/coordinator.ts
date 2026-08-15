@@ -24,7 +24,7 @@ export class CollectionCoordinator {
     private readonly database: DatabaseSync,
     private readonly adapters: readonly CollectionAdapter[],
     private readonly clock = () => new Date(),
-    private readonly storeItems: (sourceId: number, items: readonly CollectedItem[]) => void = () => {},
+    private readonly storeItems: (sourceId: number, items: readonly CollectedItem[]) => void | Promise<void> = () => {},
   ) {}
 
   async collectDue(): Promise<readonly CollectionOutcome[]> {
@@ -55,7 +55,7 @@ export class CollectionCoordinator {
           etag: row.etag ?? undefined,
           lastModified: row.last_modified ?? undefined,
         });
-        this.storeItems(row.id, result.items);
+        await this.storeItems(row.id, result.items);
         this.database.prepare(`
           UPDATE sources SET cursor = ?, etag = ?, last_modified = ?, last_checked_at = ?,
             next_fetch_at = ?, failure_count = 0, last_error = NULL, updated_at = ? WHERE id = ?

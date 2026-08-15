@@ -10,6 +10,7 @@ export interface PreviewItem {
   readonly title: string;
   readonly url: string;
   readonly publishedAt: string | null;
+  readonly content?: string | undefined;
 }
 
 export interface SourcePreview extends ResolvedSource {

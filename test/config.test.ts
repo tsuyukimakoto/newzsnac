@@ -7,8 +7,15 @@ test("loadConfig returns local-first defaults", () => {
 
   assert.equal(config.databasePath, "/tmp/newzsnac-test/data/newzsnac.sqlite");
   assert.equal(config.lmStudioUrl.href, "http://127.0.0.1:1234/v1");
+  assert.equal(config.lmStudioModel, "qwen");
+  assert.equal(config.analysisPromptVersion, "analysis-v1");
+  assert.equal(config.translationPromptVersion, "translate-v1");
   assert.equal(config.bindHost, "127.0.0.1");
   assert.equal(config.port, 4317);
+});
+
+test("loadConfig preserves SQLite's in-memory database name", () => {
+  assert.equal(loadConfig({ NEWSZNAC_DATABASE_PATH: ":memory:" }).databasePath, ":memory:");
 });
 
 test("loadConfig rejects a non-local LM Studio endpoint", () => {

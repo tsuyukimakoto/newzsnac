@@ -13,7 +13,21 @@ export class EnrichmentService {
   constructor(private readonly database: DatabaseSync) { this.queue = new JobQueue(database); }
 
   enqueueAnalysis(itemId: number, basePriority: number, publishedAt: string | null, now = new Date()): number {
-    return this.queue.enqueue("analysis", { itemId }, { itemId, priority: deterministicPreScore(basePriority, publishedAt, now) });
+    return this.queue.enqueue("analysis", { itemId }, {
+      itemId,
+      priority: deterministicPreScore(basePriority, publishedAt, now),
+      availableAt: now,
+    });
+  }
+
+  ensureAnalysisQueued(itemId: number, basePriority: number, publishedAt: string | null, now = new Date()): number | null {
+    const existing = this.database.prepare(`
+      SELECT 1 FROM item_analyses WHERE item_id = ? AND kind = 'analysis'
+      UNION ALL
+      SELECT 1 FROM jobs WHERE item_id = ? AND type = 'analysis'
+        AND status IN ('pending', 'running', 'retry_wait') LIMIT 1
+    `).get(itemId, itemId);
+    return existing ? null : this.enqueueAnalysis(itemId, basePriority, publishedAt, now);
   }
 
   requestTranslation(itemId: number, modelId: string, promptVersion: string): { status: "ready"; content: string } | { status: "queued"; jobId: number } {

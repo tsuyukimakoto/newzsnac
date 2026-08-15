@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "start": "node dist/src/server.js",
+    "start": "node dist/src/main.js",
+    "server": "node dist/src/server.js",
     "cli": "node dist/src/cli.js",
     "worker:collection": "node dist/src/workers/collection.js",
     "worker:analysis": "node dist/src/workers/analysis.js",

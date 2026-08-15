@@ -39,17 +39,21 @@ export class ItemRepository {
     const timestamp = new Date().toISOString();
     const content = extractedContent ?? collected.feedContent ?? null;
     const hash = content ? createHash("sha256").update(content).digest("hex") : null;
+    const readingMinutes = content ? Math.max(1, Math.ceil(content.split(/\s+/).length / 220)) : null;
     this.database.prepare(`
       INSERT INTO items(canonical_url, title, author, published_at, discovered_at, feed_content,
-        extracted_content, content_hash, extraction_status, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        extracted_content, content_hash, extraction_status, estimated_reading_minutes, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(canonical_url) DO UPDATE SET
         title = excluded.title, author = coalesce(excluded.author, items.author),
         feed_content = coalesce(excluded.feed_content, items.feed_content),
         extracted_content = coalesce(excluded.extracted_content, items.extracted_content),
-        content_hash = coalesce(excluded.content_hash, items.content_hash), updated_at = excluded.updated_at
+        content_hash = coalesce(excluded.content_hash, items.content_hash),
+        estimated_reading_minutes = coalesce(excluded.estimated_reading_minutes, items.estimated_reading_minutes),
+        extraction_status = CASE WHEN excluded.extraction_status = 'available' THEN 'available' ELSE items.extraction_status END,
+        updated_at = excluded.updated_at
     `).run(url, collected.title, collected.author ?? null, collected.publishedAt ?? null, timestamp,
-      collected.feedContent ?? null, extractedContent ?? null, hash, content ? "available" : "pending", timestamp, timestamp);
+      collected.feedContent ?? null, extractedContent ?? null, hash, content ? "available" : "pending", readingMinutes, timestamp, timestamp);
     const itemId = Number(this.database.prepare("SELECT id FROM items WHERE canonical_url = ?").get(url)?.id);
     this.database.prepare(`
       INSERT INTO source_items(source_id, item_id, external_id, source_url, source_title, discovered_at, raw_metadata_json)
@@ -57,6 +61,13 @@ export class ItemRepository {
       ON CONFLICT(source_id, item_id) DO UPDATE SET raw_metadata_json = excluded.raw_metadata_json
     `).run(sourceId, itemId, collected.externalId, collected.url, collected.title, timestamp, JSON.stringify(collected.rawMetadata ?? {}));
     return itemId;
+  }
+
+  markExtractionFailed(itemId: number): void {
+    this.database.prepare(`
+      UPDATE items SET extraction_status = 'failed', updated_at = ?
+      WHERE id = ? AND extracted_content IS NULL AND feed_content IS NULL
+    `).run(new Date().toISOString(), itemId);
   }
 
   groupRelated(firstItemId: number, secondItemId: number, similarity: number, reason: string): number {

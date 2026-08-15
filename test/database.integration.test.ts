@@ -40,8 +40,8 @@ test("migrations, WAL, FTS, concurrent connections, leases, and backup restore",
   assert.equal(search?.rowid, itemId);
 
   const queue = new JobQueue(first);
-  queue.enqueue("analysis", { itemId }, { itemId, priority: 100 });
-  queue.enqueue("collection", { sourceId }, { sourceId, priority: 10 });
+  queue.enqueue("analysis", { itemId }, { itemId, priority: 100, availableAt: new Date(now) });
+  queue.enqueue("collection", { sourceId }, { sourceId, priority: 10, availableAt: new Date(now) });
   const claimed = queue.claim("worker-a", 100, new Date(now));
   assert.equal(claimed?.type, "analysis");
   assert.equal(claimed?.attempts, 1);
