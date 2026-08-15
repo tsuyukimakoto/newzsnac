@@ -75,6 +75,15 @@ LM Studioが停止している場合は問答欄にエラーが表示されま�
 
 ## 主な設定
 
+プロジェクト直下の`.env`を起動時に自動で読み込みます。ファイルはGitの管理対象外です。設定の優先順位は、`config.ts`の初期値、`.env`、起動時の環境変数の順で、後にある値が優先されます。`.env`がない場合は初期値と環境変数だけで動作します。
+
+```dotenv
+NEWSZNAC_DATABASE_PATH=data/newzsnac.sqlite
+NEWSZNAC_LM_STUDIO_URL=http://127.0.0.1:1234/v1
+NEWSZNAC_LM_STUDIO_MODEL=qwen/qwen3.8-27b
+NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
+```
+
 | 環境変数 | 初期値 | 用途 |
 | --- | --- | --- |
 | `NEWSZNAC_DATABASE_PATH` | `data/newzsnac.sqlite` | SQLiteファイル |

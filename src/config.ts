@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { parseEnv } from "node:util";
 
 export interface AppConfig {
   readonly databasePath: string;
@@ -17,10 +19,25 @@ export interface AppConfig {
 
 export type ConfigEnvironment = Readonly<Record<string, string | undefined>>;
 
+export const CONFIG_DEFAULTS = Object.freeze({
+  databasePath: "data/newzsnac.sqlite",
+  lmStudioUrl: "http://127.0.0.1:1234/v1",
+  lmStudioModel: "qwen",
+  embeddingModel: null,
+  embeddingMaxCharacters: 12_000,
+  embeddingInputVersion: "embedding-v1",
+  recommendationSimilarityThreshold: 0.86,
+  analysisPromptVersion: "analysis-v1",
+  translationPromptVersion: "translate-v1",
+  chatContextMaxCharacters: 24_000,
+  bindHost: "127.0.0.1" as const,
+  port: 4317,
+});
+
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
 
 function parsePort(value: string | undefined): number {
-  if (value === undefined) return 4317;
+  if (value === undefined) return CONFIG_DEFAULTS.port;
 
   const port = Number(value);
   if (!Number.isInteger(port) || port < 0 || port > 65_535) {
@@ -31,14 +48,14 @@ function parsePort(value: string | undefined): number {
 
 function parseLoopbackHost(value: string | undefined): "127.0.0.1" | "::1" {
   if (value === undefined || value === "127.0.0.1" || value === "localhost") {
-    return "127.0.0.1";
+    return CONFIG_DEFAULTS.bindHost;
   }
   if (value === "::1") return "::1";
   throw new Error("NEWSZNAC_HOST must be a loopback address");
 }
 
 function parseLmStudioUrl(value: string | undefined): URL {
-  const url = new URL(value ?? "http://127.0.0.1:1234/v1");
+  const url = new URL(value ?? CONFIG_DEFAULTS.lmStudioUrl);
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new Error("NEWSZNAC_LM_STUDIO_URL must use HTTP or HTTPS");
   }
@@ -77,10 +94,14 @@ function numberInRange(value: string | undefined, fallback: number, name: string
 }
 
 export function loadConfig(
-  environment: ConfigEnvironment = process.env,
+  environment: ConfigEnvironment | undefined = undefined,
   workingDirectory = process.cwd(),
 ): AppConfig {
-  const configuredPath = environment.NEWSZNAC_DATABASE_PATH ?? "data/newzsnac.sqlite";
+  const actualEnvironment = environment ?? {
+    ...readDotEnv(workingDirectory),
+    ...process.env,
+  };
+  const configuredPath = actualEnvironment.NEWSZNAC_DATABASE_PATH ?? CONFIG_DEFAULTS.databasePath;
   const databasePath = configuredPath === ":memory:"
     ? configuredPath
     : isAbsolute(configuredPath)
@@ -93,16 +114,25 @@ export function loadConfig(
 
   return {
     databasePath,
-    lmStudioUrl: parseLmStudioUrl(environment.NEWSZNAC_LM_STUDIO_URL),
-    lmStudioModel: nonEmpty(environment.NEWSZNAC_LM_STUDIO_MODEL, "qwen", "NEWSZNAC_LM_STUDIO_MODEL"),
-    embeddingModel: optionalNonEmpty(environment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
-    embeddingMaxCharacters: integerInRange(environment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, 12_000, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
-    embeddingInputVersion: nonEmpty(environment.NEWSZNAC_EMBEDDING_INPUT_VERSION, "embedding-v1", "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
-    recommendationSimilarityThreshold: numberInRange(environment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, 0.86, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
-    analysisPromptVersion: nonEmpty(environment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, "analysis-v1", "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
-    translationPromptVersion: nonEmpty(environment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, "translate-v1", "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
-    chatContextMaxCharacters: integerInRange(environment.NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS, 24_000, "NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS", 1_000, 100_000),
-    bindHost: parseLoopbackHost(environment.NEWSZNAC_HOST),
-    port: parsePort(environment.NEWSZNAC_PORT),
+    lmStudioUrl: parseLmStudioUrl(actualEnvironment.NEWSZNAC_LM_STUDIO_URL),
+    lmStudioModel: nonEmpty(actualEnvironment.NEWSZNAC_LM_STUDIO_MODEL, CONFIG_DEFAULTS.lmStudioModel, "NEWSZNAC_LM_STUDIO_MODEL"),
+    embeddingModel: optionalNonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
+    embeddingMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, CONFIG_DEFAULTS.embeddingMaxCharacters, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
+    embeddingInputVersion: nonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_INPUT_VERSION, CONFIG_DEFAULTS.embeddingInputVersion, "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
+    recommendationSimilarityThreshold: numberInRange(actualEnvironment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, CONFIG_DEFAULTS.recommendationSimilarityThreshold, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
+    analysisPromptVersion: nonEmpty(actualEnvironment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, CONFIG_DEFAULTS.analysisPromptVersion, "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
+    translationPromptVersion: nonEmpty(actualEnvironment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, CONFIG_DEFAULTS.translationPromptVersion, "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
+    chatContextMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS, CONFIG_DEFAULTS.chatContextMaxCharacters, "NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS", 1_000, 100_000),
+    bindHost: parseLoopbackHost(actualEnvironment.NEWSZNAC_HOST),
+    port: parsePort(actualEnvironment.NEWSZNAC_PORT),
   };
+}
+
+function readDotEnv(workingDirectory: string): ConfigEnvironment {
+  try {
+    return parseEnv(readFileSync(resolve(workingDirectory, ".env"), "utf8"));
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return {};
+    throw error;
+  }
 }

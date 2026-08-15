@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
 import { loadConfig } from "../src/config.js";
 
@@ -21,6 +24,31 @@ test("loadConfig returns local-first defaults", () => {
 
 test("loadConfig preserves SQLite's in-memory database name", () => {
   assert.equal(loadConfig({ NEWSZNAC_DATABASE_PATH: ":memory:" }).databasePath, ":memory:");
+});
+
+test("loadConfig reads .env while process environment takes precedence", () => {
+  const directory = mkdtempSync(join(tmpdir(), "newzsnac-config-"));
+  writeFileSync(join(directory, ".env"), [
+    "NEWSZNAC_DATABASE_PATH=var/local-reader.sqlite",
+    "NEWSZNAC_LM_STUDIO_URL=http://localhost:2234/v1",
+    "NEWSZNAC_LM_STUDIO_MODEL=qwen/from-dotenv",
+    "NEWSZNAC_PORT=5317",
+  ].join("\n"));
+
+  const fromFile = loadConfig(undefined, directory);
+  assert.equal(fromFile.databasePath, join(directory, "var/local-reader.sqlite"));
+  assert.equal(fromFile.lmStudioUrl.href, "http://localhost:2234/v1");
+  assert.equal(fromFile.lmStudioModel, "qwen/from-dotenv");
+  assert.equal(fromFile.port, 5317);
+
+  const previous = process.env.NEWSZNAC_LM_STUDIO_MODEL;
+  process.env.NEWSZNAC_LM_STUDIO_MODEL = "qwen/from-process";
+  try {
+    assert.equal(loadConfig(undefined, directory).lmStudioModel, "qwen/from-process");
+  } finally {
+    if (previous === undefined) delete process.env.NEWSZNAC_LM_STUDIO_MODEL;
+    else process.env.NEWSZNAC_LM_STUDIO_MODEL = previous;
+  }
 });
 
 test("loadConfig rejects a non-local LM Studio endpoint", () => {
