@@ -2,6 +2,27 @@
 
 Newzsnac は RSS/Atom、Hacker News、Bluesky、Zenn をローカルの SQLite に収集する個人用ニュースリーダーです。収集済みの記事はネットワークや LM Studio が停止していても閲覧、検索、既読、保存を操作できます。LM Studio に Qwen が読み込まれている場合は、日本語要約、ラベル、優先度判定、要求時の翻訳も実行します。
 
+## 主な機能
+
+- RSS/Atomフィード、フィードを公開するWebサイト、Hacker News、Bluesky、Zennを情報源として登録
+- 記事の収集、本文保存、検索、既読管理、保存、関心の記録をSQLiteへ集約
+- 公開日時、要約、ポイントを中心にしたIndexと記事ペイン
+- `j`、`k`を中心としたキーボード操作と、既読記事を隠しながら読み進める連続閲覧
+- 保存済み全文のアプリ内表示と、公開元を新しいタブで開く二つの読み方
+- LM Studioによる日本語要約、ラベル、優先度判定、翻訳
+- 「気になった」記事との意味的な近さに基づく未読記事の推薦
+- 選択中の記事についてローカルLLMと問答し、別のAI Chatへ渡す文章を生成
+- CLIとOpenClawから、画面と同じ検証済みの操作を実行
+- SQLiteのオンラインバックアップと復元
+
+## 考え方
+
+Newzsnacは、情報を集める処理と読む操作を分離したローカルファーストのアプリケーションです。SQLiteを正本とし、一度収集した記事はネットワーク接続や情報源の状態にかかわらず読めます。LM Studioも任意の補助機能として扱い、停止中の分析ジョブは保持しながら、収集済み記事の閲覧や整理を継続できます。
+
+推薦では、一般的なIT記事であることを読む理由にはしません。利用者が明示的に「気になった」と記録した記事を基準に、内容が十分近い未読記事だけへ「読むべきかも？」を表示します。固定の上位件数ではなく類似度の閾値で判定し、根拠になった記事と類似度も表示します。推薦や要約は判断材料であり、購読、既読、保存、関心の状態をAIが自動で変更することはありません。
+
+記事、要約、ベクトル、問答履歴はローカルのSQLiteに保存されます。分析、埋め込み、記事問答は設定したLM Studioへ送られますが、外部のAI Chatへ自動送信しません。このアプリケーションは個人の端末での利用を前提とし、Webサーバーは初期状態でループバックアドレスだけを使用します。
+
 ## 起動
 
 必要な環境は Node.js 24 以降です。mise を使う場合は、リポジトリに固定されたバージョンを利用できます。
@@ -109,10 +130,32 @@ npm run worker:analysis -- --watch
 
 CLIとOpenClawからの操作は [docs/openclaw.md](docs/openclaw.md)、SQLiteのバックアップは [docs/backup.md](docs/backup.md) を参照してください。
 
+## 開発とOpenSpec
+
+このプロジェクトでは、機能の提案、設計、仕様、実装タスクの管理に[OpenSpec](https://github.com/Fission-AI/OpenSpec)を使用しています。共有する設計資料は`openspec/`に保存し、Gitで追跡します。`.codex/skills/`はOpenSpec CLIがCodex向けに生成する連携ファイルのため、リポジトリでは追跡しません。
+
+クローン後にOpenSpecとCodex向けの連携ファイルを用意する場合は、OpenSpec CLIをインストールして初期化します。
+
+```sh
+npm install -g @fission-ai/openspec@latest
+openspec init --tools codex .
+```
+
+OpenSpec CLIを更新した後は、プロジェクト直下で次を実行すると連携ファイルを再生成できます。
+
+```sh
+openspec update .
+```
+
+OpenSpecの設計資料を含む現在の仕様は、次のコマンドで検証できます。
+
+```sh
+openspec validate --all --strict
+```
+
 ## 検証
 
 ```sh
 npm test
-openspec validate add-interest-based-recommendations --strict
-openspec validate improve-reading-and-article-chat --strict
+openspec validate --all --strict
 ```
