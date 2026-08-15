@@ -12,8 +12,11 @@ export interface ArticleListItem {
   readonly priority: number | null;
   readonly estimatedReadingMinutes: number;
   readonly author: string | null;
+  readonly publishedAt: string | null;
   readonly content: string | null;
   readonly summary: string | null;
+  readonly labels: readonly string[];
+  readonly reasons: readonly string[];
   readonly source: string | null;
   readonly extractionStatus: string;
   readonly translationStatus: "ready" | "pending" | null;
@@ -29,8 +32,11 @@ interface ArticleRow {
   priority: number | null;
   estimated_reading_minutes: number | null;
   author: string | null;
+  published_at: string | null;
   content: string | null;
   summary: string | null;
+  labels_json: string | null;
+  reasons_json: string | null;
   source: string | null;
   extraction_status: string;
   translation_status: "ready" | "pending" | null;
@@ -38,14 +44,26 @@ interface ArticleRow {
 
 function timestamp(date = new Date()): string { return date.toISOString(); }
 
+function stringArray(value: string | null): readonly string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function mapArticle(row: ArticleRow): ArticleListItem {
   return {
     id: row.id, title: row.title, canonicalUrl: row.canonical_url,
     isRead: Boolean(row.is_read), isSaved: Boolean(row.is_saved), priority: row.priority,
     estimatedReadingMinutes: row.estimated_reading_minutes ?? 5,
-    author: row.author,
+    author: row.author, publishedAt: row.published_at,
     content: row.content,
     summary: row.summary,
+    labels: stringArray(row.labels_json),
+    reasons: stringArray(row.reasons_json),
     source: row.source,
     extractionStatus: row.extraction_status,
     translationStatus: row.translation_status,
@@ -79,9 +97,10 @@ export class ReadingService {
     const sourceId = options.sourceId ?? null;
     const rows = this.database.prepare(`
       SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved,
-        max(a.priority) AS priority, i.estimated_reading_minutes, i.author,
+        max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
-        max(a.summary_ja) AS summary, min(s.display_name) AS source,
+        max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
+        max(a.reasons_json) AS reasons_json, min(s.display_name) AS source,
         i.extraction_status,
         CASE
           WHEN EXISTS(SELECT 1 FROM item_analyses t WHERE t.item_id=i.id AND t.kind='translation') THEN 'ready'
@@ -115,9 +134,10 @@ export class ReadingService {
         FROM item_search WHERE item_search MATCH ?
       )
       SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved,
-        max(a.priority) AS priority, i.estimated_reading_minutes, i.author,
+        max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
-        max(a.summary_ja) AS summary, min(s.display_name) AS source,
+        max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
+        max(a.reasons_json) AS reasons_json, min(s.display_name) AS source,
         i.extraction_status,
         CASE
           WHEN EXISTS(SELECT 1 FROM item_analyses t WHERE t.item_id=i.id AND t.kind='translation') THEN 'ready'

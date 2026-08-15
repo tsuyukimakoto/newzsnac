@@ -15,16 +15,19 @@ export class LmStudioClient {
       body: JSON.stringify({
         model,
         temperature: 0,
+        max_tokens: 1_200,
+        stream: false,
         messages: [{ role: "user", content: `次の記事を日本語で分析してください。\nタイトル: ${title}\n本文:\n${content}` }],
         response_format: { type: "json_schema", json_schema: { name: "article_analysis", strict: true, schema: analysisJsonSchema } },
       }),
     });
-    if (!response.ok) throw new Error(`LM Studio returned HTTP ${response.status}`);
-    const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-    const contentJson = body.choices?.[0]?.message?.content;
+    if (!response.ok) throw new Error(`LM Studio returned HTTP ${response.status}: ${(await response.text()).slice(0, 1_000)}`);
+    const body = await response.json() as { choices?: Array<{ message?: { content?: string; reasoning_content?: string; reasoning?: string } }> };
+    const message = body.choices?.[0]?.message;
+    const contentJson = message?.content || message?.reasoning_content || message?.reasoning;
     if (!contentJson) throw new Error("LM Studio response did not contain structured content");
     let parsed: unknown;
-    try { parsed = JSON.parse(contentJson); } catch { throw new Error("LM Studio returned invalid JSON"); }
+    try { parsed = JSON.parse(contentJson); } catch { throw new Error(`LM Studio returned invalid JSON: ${contentJson.slice(0, 300)}`); }
     return validateAnalysis(parsed);
   }
 
@@ -34,7 +37,7 @@ export class LmStudioClient {
       method: "POST", headers: { "content-type": "application/json" },
       body: JSON.stringify({ model, temperature: 0, messages: [{ role: "user", content: `次の全文を日本語へ翻訳してください。\n${content}` }] }),
     });
-    if (!response.ok) throw new Error(`LM Studio returned HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`LM Studio returned HTTP ${response.status}: ${(await response.text()).slice(0, 1_000)}`);
     const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
     const translated = body.choices?.[0]?.message?.content;
     if (!translated) throw new Error("LM Studio response did not contain a translation");

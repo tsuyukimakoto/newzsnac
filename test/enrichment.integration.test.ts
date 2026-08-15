@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { openDatabase } from "../src/db/database.js";
 import { LmStudioClient } from "../src/enrichment/client.js";
 import { EnrichmentService, EnrichmentWorker, deterministicPreScore } from "../src/enrichment/service.js";
-import { validateAnalysis } from "../src/enrichment/schema.js";
+import { analysisJsonSchema, validateAnalysis } from "../src/enrichment/schema.js";
 
 function addItem(database: ReturnType<typeof openDatabase>): number {
   const timestamp = "2026-08-15T00:00:00.000Z";
@@ -39,8 +39,24 @@ test("analysis validates structured output, stores valid results, and orders det
   } finally { database.close(); }
 });
 
+test("LM Studio compatibility omits unsupported schema keys and accepts separated reasoning content", async () => {
+  assert.equal("uniqueItems" in analysisJsonSchema.properties.labels, false);
+  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => Response.json({
+    choices: [{ message: { content: "", reasoning_content: JSON.stringify(valid) } }],
+  }));
+  assert.deepEqual(await client.analyze("qwen", "Title", "Body"), valid);
+});
+
+test("LM Studio HTTP failures include the response detail", async () => {
+  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => new Response(
+    JSON.stringify({ error: "Unimplemented keys: uniqueItems" }), { status: 400 },
+  ));
+  await assert.rejects(() => client.analyze("qwen", "Title", "Body"), /Unimplemented keys: uniqueItems/);
+});
+
 test("invalid JSON, out-of-range values, and connection failure stay retryable and are not saved", async () => {
   assert.throws(() => validateAnalysis({ ...valid, priority: 101 }), /outside/);
+  assert.throws(() => validateAnalysis({ ...valid, labels: ["1", "2", "3", "4", "5", "6"] }), /labels/);
   for (const fetcher of [
     async () => response("not-json"),
     async () => response({ ...valid, priority: 101 }),

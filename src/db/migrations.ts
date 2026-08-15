@@ -242,4 +242,17 @@ export const migrations: readonly Migration[] = [
       );
     `,
   },
+  {
+    version: 6,
+    name: "retry_analysis_jobs_after_lm_schema_fix",
+    sql: `
+      UPDATE jobs
+      SET status = 'pending', attempts = 0, available_at = CURRENT_TIMESTAMP,
+        lease_owner = NULL, lease_expires_at = NULL, last_error = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE type = 'analysis'
+        AND status IN ('retry_wait', 'failed')
+        AND last_error = 'LM Studio returned HTTP 400';
+    `,
+  },
 ];

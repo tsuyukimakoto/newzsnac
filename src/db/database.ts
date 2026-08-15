@@ -19,16 +19,20 @@ export function migrate(database: DatabaseSync): void {
       applied_at TEXT NOT NULL
     )
   `);
-  const applied = database.prepare("SELECT version FROM schema_migrations").all();
-  const versions = new Set(applied.map((row) => Number(row.version)));
   const record = database.prepare(
     "INSERT INTO schema_migrations(version, name, applied_at) VALUES (?, ?, ?)",
   );
 
   for (const migration of migrations) {
-    if (versions.has(migration.version)) continue;
     database.exec("BEGIN IMMEDIATE");
     try {
+      const applied = database.prepare(
+        "SELECT 1 FROM schema_migrations WHERE version = ?",
+      ).get(migration.version);
+      if (applied) {
+        database.exec("COMMIT");
+        continue;
+      }
       database.exec(migration.sql);
       record.run(migration.version, migration.name, new Date().toISOString());
       database.exec("COMMIT");

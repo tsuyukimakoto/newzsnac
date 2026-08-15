@@ -21,6 +21,15 @@ function statusLabel(item) {
   return "";
 }
 
+function formatPublishedAt(value) {
+  if (!value) return "公開日時不明";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "公開日時不明";
+  return new Intl.DateTimeFormat("ja-JP", {
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit",
+  }).format(date);
+}
+
 function renderList() {
   const visible = Math.ceil(list.clientHeight / ROW_HEIGHT) + 8;
   state.start = Math.max(0, Math.floor(list.scrollTop / ROW_HEIGHT) - 4);
@@ -34,7 +43,7 @@ function renderList() {
     card.style.transform = `translateY(${index * ROW_HEIGHT}px)`;
     card.setAttribute("role", "option");
     card.setAttribute("aria-selected", String(index === state.selected));
-    card.innerHTML = `<div class="card-top"><span>${escapeHtml(item.source || "SOURCE")}</span>${statusLabel(item)}</div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary || item.content || "")}</p>`;
+    card.innerHTML = `<div class="card-top"><span>${escapeHtml(item.source || "SOURCE")} · <time class="publication" datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(formatPublishedAt(item.publishedAt))}</time></span>${statusLabel(item)}</div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary || "要約を作成しています…")}</p>`;
     card.onclick = () => select(index);
     list.append(card);
   });
@@ -49,7 +58,19 @@ function renderReader() {
     return;
   }
   reader.classList.add("open");
-  reader.innerHTML = `<div class="reader-content"><div class="kicker">${escapeHtml(item.source || "ARTICLE")}</div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　${escapeHtml(item.url || "")}</div>${item.summary ? `<div class="summary">${escapeHtml(item.summary)}</div>` : ""}<div class="body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div></div>`;
+  const published = formatPublishedAt(item.publishedAt);
+  const heading = `<div class="kicker">${escapeHtml(item.source || "ARTICLE")} · <time datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(published)}</time></div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　公開 ${escapeHtml(published)}</div>`;
+  if (state.mode === "deep") {
+    reader.innerHTML = `<div class="reader-content deep-reading">${heading}${item.summary ? `<div class="summary compact">${escapeHtml(item.summary)}</div>` : ""}<div class="body article-body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div></div>`;
+    return;
+  }
+  const labels = (item.labels || []).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
+  const reasons = (item.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
+  const analysis = item.summary
+    ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${reasons ? `<ol>${reasons}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
+    : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
+  reader.innerHTML = `<div class="reader-content fast-reading">${heading}${analysis}<button class="deep-mode-button" type="button">全文を読む <kbd>Space</kbd></button><div class="status-line">${statusLabel(item) || "分析済み"}</div></div>`;
+  reader.querySelector(".deep-mode-button").onclick = () => { setMode("deep"); renderReader(); };
 }
 
 function select(index) {
@@ -75,7 +96,7 @@ async function executeOperation(operation, input) {
   return result.data;
 }
 
-async function loadItems(query = "") {
+async function loadItems(query = "", preservePosition = false) {
   if (state.loading) return;
   state.loading = true;
   try {
@@ -85,9 +106,11 @@ async function loadItems(query = "") {
     if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
     const response = await fetch(url);
     const data = await response.json();
+    const selectedId = preservePosition ? state.items[state.selected]?.id : null;
+    const scrollTop = list.scrollTop;
     state.items = data.items || [];
-    state.selected = 0;
-    list.scrollTop = 0;
+    state.selected = selectedId ? Math.max(0, state.items.findIndex((item) => item.id === selectedId)) : 0;
+    list.scrollTop = preservePosition ? scrollTop : 0;
     document.querySelector("#empty").hidden = state.items.length > 0;
     renderList();
     renderReader();
@@ -223,4 +246,7 @@ document.querySelector("#new-count").onclick = (event) => { event.currentTarget.
 document.querySelector(".discover").addEventListener("click", showSourceManager);
 new ResizeObserver(renderList).observe(list);
 await Promise.all([loadDashboard(), loadItems()]);
-setInterval(loadDashboard, 10_000);
+setInterval(async () => {
+  await loadDashboard();
+  if (state.view === "reader" && !searchInput.value) await loadItems("", true);
+}, 10_000);

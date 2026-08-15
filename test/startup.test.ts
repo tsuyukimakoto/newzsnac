@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
@@ -58,17 +60,23 @@ test("web application starts on loopback and reports readiness", async (context)
   assert.equal(typeof message.port, "number");
 });
 
-test("normal start supervises web, collection, and analysis processes", async () => {
+test("normal start supervises web, collection, and analysis processes on one SQLite file", async (context) => {
+  const directory = mkdtempSync(join(tmpdir(), "newzsnac-startup-"));
+  context.after(() => rmSync(directory, { recursive: true, force: true }));
   const child = spawn(process.execPath, [resolve(sourceRoot, "main.js")], {
-    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: ":memory:" },
+    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: join(directory, "reader.sqlite") },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let output = "";
+  let errorOutput = "";
   child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => { output += chunk; });
-  const deadline = Date.now() + 5_000;
+  child.stderr.on("data", (chunk: string) => { errorOutput += chunk; });
+  const deadline = Date.now() + 10_000;
   while (!(output.includes('"service":"web"') && output.includes('"service":"collection-worker"') && output.includes('"service":"analysis-worker"'))) {
-    if (Date.now() >= deadline) throw new Error(`services were not all ready: ${output}`);
+    if (child.exitCode !== null) throw new Error(`supervisor exited with ${child.exitCode}: ${errorOutput}`);
+    if (Date.now() >= deadline) throw new Error(`services were not all ready: ${output}\n${errorOutput}`);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
   }
   child.kill("SIGTERM");

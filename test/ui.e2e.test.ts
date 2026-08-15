@@ -25,8 +25,18 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
     INSERT INTO items(id, canonical_url, title, published_at, discovered_at, feed_content,
       extraction_status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?)
   `);
-  insert.run(1, "https://example.com/1", "First", "2026-08-15T02:00:00.000Z", timestamp, "First body", timestamp, timestamp);
-  insert.run(2, "https://example.com/2", "Second", "2026-08-15T01:00:00.000Z", timestamp, "Second body", timestamp, timestamp);
+  insert.run(1, "https://example.com/1", "First", "2026-08-15T02:00:00.000Z", timestamp, "First body ".repeat(800), timestamp, timestamp);
+  insert.run(2, "https://example.com/2", "Second", "2026-08-15T01:00:00.000Z", timestamp, "Second body ".repeat(800), timestamp, timestamp);
+  for (let id = 3; id <= 30; id += 1) {
+    const publishedAt = new Date(Date.parse("2026-08-15T00:00:00.000Z") - id * 3_600_000).toISOString();
+    insert.run(id, `https://example.com/${id}`, `Article ${id}`, publishedAt, timestamp, `Body ${id}`, timestamp, timestamp);
+  }
+  const insertAnalysis = database.prepare(`
+    INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
+      labels_json, priority, reasons_json, item_type, original_language, analyzed_at)
+    VALUES (?, 'analysis', 'qwen', 'v1', ?, ?, 80, ?, 'article', 'en', ?)
+  `);
+  insertAnalysis.run(1, "First summary", '["AI","Research"]', '["First point","Second point"]', timestamp);
   const config = loadConfig({ NEWSZNAC_PORT: "0" });
   const feed = `<?xml version="1.0"?><rss><channel><title>New source</title><item><title>Preview article</title><link>https://example.com/preview</link></item></channel></rss>`;
   const fetcher: Fetch = async (input) => {
@@ -50,8 +60,16 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   await page.goto(`http://127.0.0.1:${address.port}`);
 
   assert.equal(await page.locator(".reader-content h1").textContent(), "First");
-  assert.equal(await page.locator("#total-count").textContent(), "2");
+  assert.equal(await page.locator("#total-count").textContent(), "30");
   assert.equal(await page.locator("#runtime-status").textContent(), "SQLite · LM Studio (qwen)");
+  assert.equal(await page.locator(".reader-summary p").textContent(), "First summary");
+  assert.deepEqual(await page.locator(".reader-points li").allTextContents(), ["First point", "Second point"]);
+  assert.equal(await page.locator(".article-body").count(), 0);
+  assert.match(await page.locator(".article-card.selected .publication").textContent() ?? "", /2026\/08\/15/);
+  const readerScrollBefore = await page.locator("#reader").evaluate((element) => element.scrollTop);
+  await page.locator("#article-list").evaluate((element) => { element.scrollTop = 500; element.dispatchEvent(new Event("scroll")); });
+  assert.ok(await page.locator("#article-list").evaluate((element) => element.scrollTop) > 0);
+  assert.equal(await page.locator("#reader").evaluate((element) => element.scrollTop), readerScrollBefore);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/operations/article.read")),
     page.keyboard.press("j"),
@@ -60,15 +78,24 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   await page.locator("#search").focus();
   await page.keyboard.type("j");
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  assert.equal(await page.locator(".analysis-pending h2").textContent(), "要約を準備しています");
+  insertAnalysis.run(2, "Second summary", '["Business"]', '["Updated point"]', timestamp);
   await page.locator("#search").fill("Second");
   await Promise.all([
     page.waitForResponse((response) => response.url().includes("/api/items?q=Second")),
     page.locator("#search").press("Enter"),
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  assert.equal(await page.locator(".reader-summary p").textContent(), "Second summary");
+  assert.equal(await page.locator(".reader-points li").textContent(), "Updated point");
   await page.locator("#article-list").focus();
   await page.keyboard.press("Space");
   assert.equal(await page.locator("#mode").textContent(), "精読モード");
+  assert.equal(await page.locator(".article-body").count(), 1);
+  const listScrollBefore = await page.locator("#article-list").evaluate((element) => element.scrollTop);
+  await page.locator("#reader").evaluate((element) => { element.scrollTop = 400; });
+  assert.ok(await page.locator("#reader").evaluate((element) => element.scrollTop) > 0);
+  assert.equal(await page.locator("#article-list").evaluate((element) => element.scrollTop), listScrollBefore);
   await Promise.all([page.waitForResponse((response) => response.url().endsWith("/api/operations/article.save")), page.keyboard.press("s")]);
   await page.locator("#article-list").focus();
   await page.keyboard.press("u");
