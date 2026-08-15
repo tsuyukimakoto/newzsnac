@@ -29,8 +29,16 @@ test("incremental recommendation and a recommended view stay below 50ms with 10,
       INSERT INTO items(id, canonical_url, title, published_at, discovered_at, created_at, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?)
     `);
+    const insertAnalysis = database.prepare(`
+      INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
+        labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
+      VALUES (?, 'analysis', 'fixture', 'fixture', ?, '[]', 50, '[]', 'article', 'en', ?)
+    `);
     database.exec("BEGIN");
-    for (let id = 1; id <= 10_000; id += 1) insertItem.run(id, `https://example.com/${id}`, `Article ${id}`, now, now, now, now);
+    for (let id = 1; id <= 10_000; id += 1) {
+      insertItem.run(id, `https://example.com/${id}`, `Article ${id}`, now, now, now, now);
+      insertAnalysis.run(id, `Summary ${id}`, now);
+    }
     const insertState = database.prepare("INSERT INTO item_user_states(item_id, interest, updated_at) VALUES (?, 'interested', ?)");
     const insertEmbedding = database.prepare(`
       INSERT INTO item_embeddings(item_id, model_id, input_version, input_hash, dimensions, vector, l2_norm, embedded_at)

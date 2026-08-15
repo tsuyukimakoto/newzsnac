@@ -3,16 +3,17 @@ import type { AppConfig } from "../config.js";
 import { DiscoveryService } from "../discovery/service.js";
 import { EnrichmentService } from "../enrichment/service.js";
 import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
-import { ReadingService } from "../reading/service.js";
+import { ReadingService, type ProcessingState } from "../reading/service.js";
 import { SourceResolver, type Fetch } from "../sources/resolver.js";
 import { SourceService, type SourceSettings } from "../sources/service.js";
 import { RecommendationService } from "../recommendation/service.js";
 import { ArticleChatService } from "../chat/service.js";
 import { LmStudioClient } from "../enrichment/client.js";
+import { ArticleRecoveryService } from "../collection/recovery.js";
 
 export const operationNames = [
   "source.resolve", "source.preview", "source.add", "source.pause", "source.resume",
-  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate",
+  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate", "article.retry",
   "article.chat.list", "article.chat.ask", "article.chat.handoff",
   "dashboard.summary", "runtime.status",
 ] as const;
@@ -45,6 +46,7 @@ const mutatingOperations = new Set<OperationName>([
   "source.add", "source.pause", "source.resume", "candidate.dismiss",
   "article.save", "article.read", "article.translate",
   "article.interest",
+  "article.retry",
   "article.chat.ask",
 ]);
 
@@ -57,6 +59,7 @@ export class ApplicationOperations {
     private readonly reading: ReadingService,
     private readonly enrichment: EnrichmentService,
     private readonly recommendations: RecommendationService,
+    private readonly recovery: ArticleRecoveryService,
     private readonly chat: ArticleChatService,
     private readonly config: AppConfig,
     private readonly fetcher: Fetch,
@@ -106,17 +109,23 @@ export class ApplicationOperations {
         const interested = optionalBoolean(input, "interested");
         const recommended = optionalBoolean(input, "recommended");
         const unread = optionalBoolean(input, "unread");
+        const processingState = optionalProcessingState(input, "processingState");
         return this.reading.list({
           ...(sourceId === undefined ? {} : { sourceId }),
           ...(saved === undefined ? {} : { saved }),
           ...(interested === undefined ? {} : { interested }),
           ...(recommended === undefined ? {} : { recommended }),
           ...(unread === undefined ? {} : { unread }),
+          ...(processingState === undefined ? {} : { processingState }),
         });
       }
       case "article.search": {
         const unread = optionalBoolean(input, "unread");
-        return this.reading.search(text(input, "query"), unread === undefined ? {} : { unread });
+        const processingState = optionalProcessingState(input, "processingState");
+        return this.reading.search(text(input, "query"), {
+          ...(unread === undefined ? {} : { unread }),
+          ...(processingState === undefined ? {} : { processingState }),
+        });
       }
       case "article.save": {
         const id = integer(input, "articleId"); const saved = boolean(input, "saved");
@@ -141,6 +150,12 @@ export class ApplicationOperations {
         const promptVersion = optionalText(input, "promptVersion") ?? this.config.translationPromptVersion;
         return this.mutate(name, String(id), caller, () => this.enrichment.requestTranslation(id, modelId, promptVersion));
       }
+      case "article.retry": {
+        const id = integer(input, "articleId");
+        const result = await this.recovery.retry(id);
+        this.audit(name, String(id), caller, "success", result);
+        return result;
+      }
       case "article.chat.list": return this.chat.list(integer(input, "articleId"));
       case "article.chat.ask": {
         const id = integer(input, "articleId");
@@ -155,14 +170,17 @@ export class ApplicationOperations {
     }
   }
 
-  private dashboardSummary(): { total: number; unread: number; saved: number; interested: number; recommended: number; readingMinutes: number } {
+  private dashboardSummary(): { total: number; unread: number; saved: number; interested: number; recommended: number; pending: number; failed: number; readingMinutes: number } {
     const row = this.database.prepare(`
-      SELECT count(*) AS total,
-        sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
-        sum(CASE WHEN coalesce(u.is_saved, 0) = 1 THEN 1 ELSE 0 END) AS saved,
-        sum(CASE WHEN u.interest = 'interested' THEN 1 ELSE 0 END) AS interested,
-        sum(CASE WHEN r.target_item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL THEN 1 ELSE 0 END) AS recommended,
-        sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN coalesce(i.estimated_reading_minutes, 5) ELSE 0 END) AS reading_minutes
+      SELECT
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') THEN 1 ELSE 0 END) AS total,
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_saved, 0) = 1 THEN 1 ELSE 0 END) AS saved,
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND u.interest = 'interested' THEN 1 ELSE 0 END) AS interested,
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND r.target_item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL THEN 1 ELSE 0 END) AS recommended,
+        sum(CASE WHEN i.extraction_status != 'failed' AND NOT EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') THEN 1 ELSE 0 END) AS pending,
+        sum(CASE WHEN i.extraction_status = 'failed' THEN 1 ELSE 0 END) AS failed,
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_read, 0) = 0 THEN coalesce(i.estimated_reading_minutes, 5) ELSE 0 END) AS reading_minutes
       FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
       LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
         AND r.score >= ?
@@ -174,6 +192,8 @@ export class ApplicationOperations {
       saved: Number(row?.saved ?? 0),
       interested: Number(row?.interested ?? 0),
       recommended: Number(row?.recommended ?? 0),
+      pending: Number(row?.pending ?? 0),
+      failed: Number(row?.failed ?? 0),
       readingMinutes: Number(row?.reading_minutes ?? 0),
     };
   }
@@ -181,12 +201,13 @@ export class ApplicationOperations {
   private listSources(): readonly unknown[] {
     return this.database.prepare(`
       SELECT s.id, s.kind, s.display_name AS displayName, s.status,
-        count(si.item_id) AS total,
-        sum(CASE WHEN si.item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
+        sum(CASE WHEN si.item_id IS NOT NULL AND i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') THEN 1 ELSE 0 END) AS total,
+        sum(CASE WHEN si.item_id IS NOT NULL AND i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
         s.last_checked_at AS lastCheckedAt, s.next_fetch_at AS nextFetchAt,
         s.failure_count AS failureCount, s.last_error AS lastError
       FROM sources s
       LEFT JOIN source_items si ON si.source_id = s.id
+      LEFT JOIN items i ON i.id = si.item_id
       LEFT JOIN item_user_states u ON u.item_id = si.item_id
       GROUP BY s.id ORDER BY lower(s.display_name), s.id
     `).all().map((row) => ({ ...row, id: Number(row.id), total: Number(row.total), unread: Number(row.unread) }));
@@ -272,6 +293,12 @@ function optionalText(input: Record<string, unknown>, key: string): string | und
   return text(input, key);
 }
 
+function optionalProcessingState(input: Record<string, unknown>, key: string): ProcessingState | undefined {
+  if (input[key] === undefined) return undefined;
+  if (input[key] === "ready" || input[key] === "pending" || input[key] === "failed") return input[key];
+  throw new Error(`${key} must be ready, pending, or failed`);
+}
+
 function settings(value: unknown): SourceSettings {
   if (value === undefined) return {};
   return record(value) as SourceSettings;
@@ -292,6 +319,7 @@ export function createApplicationOperations(database: DatabaseSync, config: AppC
     database, resolver, sources, new DiscoveryService(database, resolver, sources),
     new ReadingService(database, config.embeddingModel ?? "__disabled__", config.embeddingInputVersion,
       config.recommendationSimilarityThreshold),
-    new EnrichmentService(database), recommendations, chat, config, fetcher,
+    new EnrichmentService(database), recommendations, new ArticleRecoveryService(database, config, fetcher),
+    chat, config, fetcher,
   );
 }

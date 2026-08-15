@@ -31,6 +31,13 @@ export async function extractArticle(url: string, fetcher: Fetch = globalThis.fe
     .trim();
 }
 
+export function articleContentMetadata(content: string): { readonly hash: string; readonly readingMinutes: number } {
+  return {
+    hash: createHash("sha256").update(content).digest("hex"),
+    readingMinutes: Math.max(1, Math.ceil(content.split(/\s+/).length / 220)),
+  };
+}
+
 export class ItemRepository {
   constructor(private readonly database: DatabaseSync) {}
 
@@ -38,8 +45,9 @@ export class ItemRepository {
     const url = normalizeUrl(collected.url);
     const timestamp = new Date().toISOString();
     const content = extractedContent ?? collected.feedContent ?? null;
-    const hash = content ? createHash("sha256").update(content).digest("hex") : null;
-    const readingMinutes = content ? Math.max(1, Math.ceil(content.split(/\s+/).length / 220)) : null;
+    const metadata = content ? articleContentMetadata(content) : null;
+    const hash = metadata?.hash ?? null;
+    const readingMinutes = metadata?.readingMinutes ?? null;
     this.database.prepare(`
       INSERT INTO items(canonical_url, title, author, published_at, discovered_at, feed_content,
         extracted_content, content_hash, extraction_status, estimated_reading_minutes, created_at, updated_at)

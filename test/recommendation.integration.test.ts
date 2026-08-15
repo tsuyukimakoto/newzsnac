@@ -18,6 +18,11 @@ function insertItem(database: ReturnType<typeof openDatabase>, id: number, title
       extraction_status, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, 'available', ?, ?)
   `).run(id, `https://example.com/${id}`, title, now, now, `${title} details`, now, now);
+  database.prepare(`
+    INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
+      labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
+    VALUES (?, 'analysis', 'fixture', 'fixture', ?, '[]', 50, '[]', 'article', 'en', ?)
+  `).run(id, `${title} summary`, now);
 }
 
 test("embedding input, BLOB storage, compatibility, and cosine similarity are deterministic", () => {

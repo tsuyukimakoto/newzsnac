@@ -3,6 +3,7 @@ import type { KeyPoint } from "../enrichment/schema.js";
 
 export type SortOrder = "newest" | "recommended" | "source" | "oldest";
 export type Interest = "interested" | "not_interested" | null;
+export type ProcessingState = "ready" | "pending" | "failed";
 
 export interface ArticleListItem {
   readonly id: number;
@@ -21,6 +22,7 @@ export interface ArticleListItem {
   readonly keyPoints: readonly KeyPoint[];
   readonly source: string | null;
   readonly extractionStatus: string;
+  readonly processingState: ProcessingState;
   readonly translationStatus: "ready" | "pending" | null;
   readonly url: string;
   readonly recommendation: { readonly sourceItemId: number; readonly sourceTitle: string; readonly score: number } | null;
@@ -43,6 +45,7 @@ interface ArticleRow {
   key_points_json: string;
   source: string | null;
   extraction_status: string;
+  processing_state: ProcessingState;
   translation_status: "ready" | "pending" | null;
   recommendation_source_id: number | null;
   recommendation_source_title: string | null;
@@ -85,6 +88,7 @@ function mapArticle(row: ArticleRow): ArticleListItem {
     keyPoints: keyPointArray(row.key_points_json),
     source: row.source,
     extractionStatus: row.extraction_status,
+    processingState: row.processing_state,
     translationStatus: row.translation_status,
     url: row.canonical_url,
     recommendation: row.recommendation_source_id === null || row.recommendation_score === null ? null : {
@@ -113,7 +117,7 @@ export class ReadingService {
 
   setInterest(itemId: number, interest: Interest): void { this.upsertState(itemId, { interest }); }
 
-  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean } = {}): readonly ArticleListItem[] {
+  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean; processingState?: ProcessingState } = {}): readonly ArticleListItem[] {
     const sort = options.sort ?? "newest";
     const order = {
       newest: "i.published_at DESC, i.id DESC",
@@ -121,7 +125,11 @@ export class ReadingService {
       source: "coalesce(min(s.display_name), ''), i.published_at DESC, i.id DESC",
       oldest: "i.published_at ASC, i.id ASC",
     }[sort];
-    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)", "(? = 0 OR coalesce(u.is_read, 0) = 0)"];
+    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)", "(? = 0 OR coalesce(u.is_read, 0) = 0)", `CASE
+      WHEN i.extraction_status = 'failed' THEN 'failed'
+      WHEN EXISTS(SELECT 1 FROM item_analyses state_analysis WHERE state_analysis.item_id = i.id AND state_analysis.kind = 'analysis') THEN 'ready'
+      ELSE 'pending'
+    END = ?`];
     const baseline = options.baselineAt?.toISOString() ?? null;
     const sourceId = options.sourceId ?? null;
     const rows = this.database.prepare(`
@@ -131,6 +139,11 @@ export class ReadingService {
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
         coalesce(max(a.key_points_json), '[]') AS key_points_json, min(s.display_name) AS source,
         i.extraction_status,
+        CASE
+          WHEN i.extraction_status = 'failed' THEN 'failed'
+          WHEN EXISTS(SELECT 1 FROM item_analyses state_analysis WHERE state_analysis.item_id = i.id AND state_analysis.kind = 'analysis') THEN 'ready'
+          ELSE 'pending'
+        END AS processing_state,
         CASE
           WHEN EXISTS(SELECT 1 FROM item_analyses t WHERE t.item_id=i.id AND t.kind='translation') THEN 'ready'
           WHEN EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='translation' AND j.status IN ('pending','running','retry_wait')) THEN 'pending'
@@ -152,7 +165,8 @@ export class ReadingService {
       ORDER BY ${options.recommended ? "r.score DESC, i.published_at DESC, i.id DESC" : order}
     `).all(this.recommendationModel, this.embeddingInputVersion, this.recommendationSimilarityThreshold,
       baseline, baseline, sourceId, sourceId,
-      Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false)) as unknown as ArticleRow[];
+      Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false),
+      options.processingState ?? "ready") as unknown as ArticleRow[];
     const articles = rows.map(mapArticle);
     if (options.timeBudgetMinutes === undefined) return articles;
     let remaining = options.timeBudgetMinutes;
@@ -163,7 +177,7 @@ export class ReadingService {
     });
   }
 
-  search(query: string, options: { unread?: boolean } = {}): readonly ArticleListItem[] {
+  search(query: string, options: { unread?: boolean; processingState?: ProcessingState } = {}): readonly ArticleListItem[] {
     if (!query.trim()) return [];
     const rows = this.database.prepare(`
       WITH matches AS (
@@ -176,6 +190,11 @@ export class ReadingService {
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
         coalesce(max(a.key_points_json), '[]') AS key_points_json, min(s.display_name) AS source,
         i.extraction_status,
+        CASE
+          WHEN i.extraction_status = 'failed' THEN 'failed'
+          WHEN EXISTS(SELECT 1 FROM item_analyses state_analysis WHERE state_analysis.item_id = i.id AND state_analysis.kind = 'analysis') THEN 'ready'
+          ELSE 'pending'
+        END AS processing_state,
         CASE
           WHEN EXISTS(SELECT 1 FROM item_analyses t WHERE t.item_id=i.id AND t.kind='translation') THEN 'ready'
           WHEN EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='translation' AND j.status IN ('pending','running','retry_wait')) THEN 'pending'
@@ -194,9 +213,14 @@ export class ReadingService {
         AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
       LEFT JOIN items ri ON ri.id = r.source_item_id
       WHERE (? = 0 OR coalesce(u.is_read, 0) = 0)
+        AND CASE
+          WHEN i.extraction_status = 'failed' THEN 'failed'
+          WHEN EXISTS(SELECT 1 FROM item_analyses state_analysis WHERE state_analysis.item_id = i.id AND state_analysis.kind = 'analysis') THEN 'ready'
+          ELSE 'pending'
+        END = ?
       GROUP BY i.id ORDER BY i.id DESC
     `).all(query, this.recommendationModel, this.embeddingInputVersion,
-      this.recommendationSimilarityThreshold, Number(options.unread ?? false)) as unknown as ArticleRow[];
+      this.recommendationSimilarityThreshold, Number(options.unread ?? false), options.processingState ?? "ready") as unknown as ArticleRow[];
     return rows.map(mapArticle);
   }
 

@@ -31,6 +31,12 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
     const publishedAt = new Date(Date.parse("2026-08-15T00:00:00.000Z") - id * 3_600_000).toISOString();
     insert.run(id, `https://example.com/${id}`, `Article ${id}`, publishedAt, timestamp, `Body ${id}`, timestamp, timestamp);
   }
+  insert.run(31, "https://example.com/31", "Pending article", "2026-08-14T20:00:00.000Z", timestamp, "Pending body", timestamp, timestamp);
+  database.prepare(`
+    INSERT INTO items(id, canonical_url, title, published_at, discovered_at,
+      extraction_status, created_at, updated_at)
+    VALUES (32, 'https://example.com/32', 'Failed article', '2026-08-14T19:00:00.000Z', ?, 'failed', ?, ?)
+  `).run(timestamp, timestamp, timestamp);
   const insertAnalysis = database.prepare(`
     INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
       labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
@@ -38,6 +44,11 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   `);
   insertAnalysis.run(1, "First summary", '["AI","Research"]',
     '[{"headline":"First point","detail":"First detail explains the article."},{"headline":"Second point","detail":""}]', timestamp);
+  insertAnalysis.run(2, "Second summary", '["Business"]',
+    '[{"headline":"Updated point","detail":"Updated detail explains the claim."}]', timestamp);
+  for (let id = 3; id <= 30; id += 1) {
+    insertAnalysis.run(id, `Summary ${id}`, '[]', '[]', timestamp);
+  }
   database.prepare(`
     INSERT INTO item_recommendations(target_item_id, source_item_id, score, model_id, input_version, calculated_at)
     VALUES (2, 1, 0.91, 'embed-model', 'embedding-v1', ?)
@@ -52,6 +63,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
       ? new Response("model unavailable", { status: 503 })
       : Response.json({ choices: [{ message: { content: "この記事の重要点はローカル処理です。" } }] });
     if (url === "https://example.com/feed.xml") return new Response(feed, { headers: { "content-type": "application/rss+xml" } });
+    if (url === "https://example.com/32") return new Response("<main><h1>Recovered article</h1><p>Recovered body for analysis.</p></main>");
     throw new Error(`unexpected request: ${url}`);
   };
   const operations = createApplicationOperations(database, config, fetcher);
@@ -70,6 +82,8 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
 
   assert.equal(await page.locator(".reader-content h1").textContent(), "First");
   assert.equal(await page.locator("#total-count").textContent(), "30");
+  assert.equal(await page.locator("#pending-count").textContent(), "1");
+  assert.equal(await page.locator("#failed-count").textContent(), "1");
   assert.equal(await page.locator("#runtime-status").textContent(), "SQLite · LM Studio (qwen) · 推薦 1");
   assert.equal(await page.locator(".reader-summary p").textContent(), "First summary");
   assert.deepEqual(await page.locator(".key-point-headline").allTextContents(), ["First point", "Second point"]);
@@ -79,6 +93,33 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator("#original-link").getAttribute("target"), "_blank");
   assert.match(await page.locator("#original-link").getAttribute("rel") ?? "", /noopener/);
   assert.match(await page.locator(".article-card.selected .publication").textContent() ?? "", /2026\/08\/15/);
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("status=pending")),
+    page.locator("#filter-pending").click(),
+  ]);
+  assert.equal(await page.locator("#stream-title").textContent(), "準備中");
+  assert.deepEqual(await page.locator(".article-card h2").allTextContents(), ["Pending article"]);
+  assert.equal(await page.locator(".analysis-pending h2").textContent(), "要約を準備しています");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("status=failed")),
+    page.locator("#filter-failed").click(),
+  ]);
+  assert.equal(await page.locator("#stream-title").textContent(), "取得失敗");
+  assert.deepEqual(await page.locator(".article-card h2").allTextContents(), ["Failed article"]);
+  assert.equal(await page.locator("#retry-article").textContent(), "本文を再取得");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.retry")),
+    page.waitForResponse((response) => response.url().includes("status=pending")),
+    page.locator("#retry-article").click(),
+  ]);
+  assert.equal(database.prepare("SELECT extraction_status FROM items WHERE id=32").get()?.extraction_status, "available");
+  assert.equal(await page.locator("#stream-title").textContent(), "準備中");
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Failed article");
+  assert.equal(await page.locator("#pending-count").textContent(), "2");
+  await Promise.all([
+    page.waitForResponse((response) => !response.url().includes("status=") && response.url().includes("/api/items")),
+    page.locator("#filter-all").click(),
+  ]);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/operations/article.interest")),
     page.locator("#interest-button").click(),
@@ -179,9 +220,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   await page.locator("#search").focus();
   await page.keyboard.type("j");
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
-  assert.equal(await page.locator(".analysis-pending h2").textContent(), "要約を準備しています");
-  insertAnalysis.run(2, "Second summary", '["Business"]',
-    '[{"headline":"Updated point","detail":"Updated detail explains the claim."}]', timestamp);
+  assert.equal(await page.locator(".reader-summary p").textContent(), "Second summary");
   await page.locator("#search").fill("Second");
   await Promise.all([
     page.waitForResponse((response) => response.url().includes("/api/items?q=Second")),

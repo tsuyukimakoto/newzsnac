@@ -5,6 +5,7 @@ const state = {
   loading: false, loadGeneration: 0, navigating: false, filter: { type: "all" }, view: "reader", total: null,
   hideRead: storedHideRead !== "false",
   chats: new Map(),
+  retrying: new Set(), retryErrors: new Map(),
   backHistory: [], forwardHistory: [],
 };
 if (storedHideRead === null) localStorage.setItem("newzsnac.hideRead", "true");
@@ -77,9 +78,10 @@ function renderReader() {
   const published = formatPublishedAt(item.publishedAt);
   const recommendation = item.recommendation
     ? `<aside class="recommendation-note"><b>読むべきかも？</b><span>気になった「${escapeHtml(item.recommendation.sourceTitle)}」に内容が近い · 類似度 ${Math.round(item.recommendation.score * 100)}%</span></aside>` : "";
+  const contentAction = item.processingState === "failed" ? "" : `<button id="stored-content-button" type="button">${state.mode === "deep" ? "要約に戻る" : "保存済み全文を読む"} <kbd>Space</kbd></button>`;
   const actions = `<div class="reader-actions">
     <button id="interest-button" type="button" aria-pressed="${item.interest === "interested"}">${item.interest === "interested" ? "◆ 気になった" : "◇ 気になった"} <kbd>i</kbd></button>
-    <button id="stored-content-button" type="button">${state.mode === "deep" ? "要約に戻る" : "保存済み全文を読む"} <kbd>Space</kbd></button>
+    ${contentAction}
     <a id="original-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">元の記事を開く ↗ <kbd>o</kbd></a>
   </div>`;
   const heading = `<div class="kicker">${escapeHtml(item.source || "ARTICLE")} · <time datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(published)}</time></div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　公開 ${escapeHtml(published)}</div>${actions}${recommendation}`;
@@ -92,7 +94,11 @@ function renderReader() {
     contentClass = "reader-content fast-reading";
     const labels = (item.labels || []).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
     const keyPoints = (item.keyPoints || []).map((point) => `<li><div><strong class="key-point-headline">${escapeHtml(point.headline)}</strong>${point.detail ? `<p class="key-point-detail">${escapeHtml(point.detail)}</p>` : ""}</div></li>`).join("");
-    const analysis = item.summary
+    const retrying = state.retrying.has(item.id);
+    const retryError = state.retryErrors.get(item.id) || "";
+    const analysis = item.processingState === "failed"
+      ? `<section class="extraction-failed"><span class="failure-mark">!</span><div><div class="section-label">RETRIEVAL FAILED</div><h2>本文を取得できませんでした</h2><p>元の記事が一時的に応答しなかった可能性があります。再取得すると、成功後は「準備中」へ移動します。</p><button id="retry-article" type="button" ${retrying ? "disabled" : ""}>${retrying ? "再取得しています…" : "本文を再取得"}</button><p class="retry-error" role="alert" ${retryError ? "" : "hidden"}>${escapeHtml(retryError)}</p></div></section>`
+      : item.summary
       ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${keyPoints ? `<ol>${keyPoints}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
       : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
     articleMarkup = `${heading}${analysis}<div class="status-line">${statusLabel(item) || "分析済み"}</div>`;
@@ -105,7 +111,7 @@ function renderReader() {
     existingContent.className = contentClass;
     existingArticle.innerHTML = articleMarkup;
   } else {
-    reader.innerHTML = `<div class="${contentClass}"><div class="article-detail">${articleMarkup}</div>${chatShell(item)}</div>`;
+    reader.innerHTML = `<div class="${contentClass}"><div class="article-detail">${articleMarkup}</div>${item.processingState === "failed" ? "" : chatShell(item)}</div>`;
   }
   bindReaderActions(item);
 }
@@ -115,7 +121,31 @@ function bindReaderActions(item) {
   if (button) button.onclick = () => toggleInterest(item);
   const contentButton = reader.querySelector("#stored-content-button");
   if (contentButton) contentButton.onclick = () => { setMode(state.mode === "deep" ? "fast" : "deep"); renderReader(); };
+  const retryButton = reader.querySelector("#retry-article");
+  if (retryButton) retryButton.onclick = () => retryArticle(item);
   renderChat(item);
+}
+
+async function retryArticle(item) {
+  if (state.retrying.has(item.id)) return;
+  state.retrying.add(item.id);
+  state.retryErrors.delete(item.id);
+  renderReader();
+  try {
+    const result = await executeOperation("article.retry", { articleId: item.id });
+    await loadDashboard();
+    const nextFilter = result.processingState === "ready" ? "all" : result.processingState;
+    state.filter = { type: nextFilter };
+    state.backHistory = [];
+    state.forwardHistory = [];
+    activateFilter(document.querySelector(`#filter-${nextFilter}`));
+    await loadItems("", false, item.id);
+  } catch (error) {
+    state.retryErrors.set(item.id, error.message);
+  } finally {
+    state.retrying.delete(item.id);
+    renderReader();
+  }
 }
 
 function chatShell(item) {
@@ -244,7 +274,7 @@ async function moveFocus(index) {
   state.navigating = true;
   document.querySelector("#stream-error").textContent = "";
   try {
-    if (!current.isRead) {
+    if (!current.isRead && current.processingState === "ready") {
       await executeOperation("article.read", { articleId: current.id, read: true });
       current.isRead = true;
       await loadDashboard();
@@ -297,7 +327,7 @@ async function moveForward() {
   state.navigating = true;
   document.querySelector("#stream-error").textContent = "";
   try {
-    if (!current.isRead) {
+    if (!current.isRead && current.processingState === "ready") {
       await executeOperation("article.read", { articleId: current.id, read: true });
       current.isRead = true;
       await loadDashboard();
@@ -343,6 +373,7 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
   try {
     const url = new URL("/api/items", location.origin);
     if (query) url.searchParams.set("q", query);
+    if (state.filter.type === "pending" || state.filter.type === "failed") url.searchParams.set("status", state.filter.type);
     if (!query && state.filter.type === "source") url.searchParams.set("sourceId", state.filter.id);
     if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
     if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
@@ -371,11 +402,26 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
     list.scrollTop = preservePosition ? scrollTop : 0;
     document.querySelector("#empty").hidden = state.items.length > 0;
     document.querySelector("#visible-count").textContent = `${state.items.length}件を表示`;
+    renderStreamContext();
     renderList();
     renderReader();
   } finally {
     if (generation === state.loadGeneration) state.loading = false;
   }
+}
+
+const streamContexts = {
+  all: { kicker: "INBOX", title: "今日の読みもの", emptyTitle: "読める記事はまだありません", emptyDetail: "分析が終わった記事はここに表示されます。" },
+  pending: { kicker: "PROCESSING", title: "準備中", emptyTitle: "準備中の記事はありません", emptyDetail: "新しい記事を取得すると、分析が終わるまでここに表示されます。" },
+  failed: { kicker: "RETRIEVAL", title: "取得失敗", emptyTitle: "取得に失敗した記事はありません", emptyDetail: "本文を取得できなかった記事だけがここに表示されます。" },
+};
+
+function renderStreamContext() {
+  const context = streamContexts[state.filter.type] || streamContexts.all;
+  document.querySelector("#stream-kicker").textContent = context.kicker;
+  document.querySelector("#stream-title").textContent = context.title;
+  document.querySelector("#empty-title").textContent = context.emptyTitle;
+  document.querySelector("#empty-detail").textContent = context.emptyDetail;
 }
 
 function formatMinutes(minutes) {
@@ -403,6 +449,8 @@ async function loadDashboard() {
   document.querySelector("#saved-count").textContent = summary.saved || 0;
   document.querySelector("#interested-count").textContent = summary.interested || 0;
   document.querySelector("#recommended-count").textContent = summary.recommended || 0;
+  document.querySelector("#pending-count").textContent = summary.pending || 0;
+  document.querySelector("#failed-count").textContent = summary.failed || 0;
   document.querySelector("#unread-count").textContent = `未読 ${summary.unread || 0}`;
   document.querySelector("#reading-time").textContent = formatMinutes(summary.readingMinutes || 0);
   const sourceList = document.querySelector("#source-list");
@@ -484,7 +532,7 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault(); void moveForward();
   } else if (event.key === "k") {
     event.preventDefault(); moveBackward();
-  } else if (event.code === "Space") {
+  } else if (event.code === "Space" && item?.processingState !== "failed") {
     event.preventDefault(); setMode(state.mode === "deep" ? "fast" : "deep"); renderReader();
   } else if (event.key === "/") {
     event.preventDefault(); document.querySelector("#search").focus();
@@ -511,6 +559,8 @@ searchInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter") { event.preventDefault(); state.view = "reader"; loadItems(searchInput.value); }
 });
 document.querySelector("#filter-all").onclick = (event) => { state.filter = { type: "all" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+document.querySelector("#filter-pending").onclick = (event) => { state.filter = { type: "pending" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+document.querySelector("#filter-failed").onclick = (event) => { state.filter = { type: "failed" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-saved").onclick = (event) => { state.filter = { type: "saved" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-interested").onclick = (event) => { state.filter = { type: "interested" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-recommended").onclick = (event) => { state.filter = { type: "recommended" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };

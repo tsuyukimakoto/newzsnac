@@ -30,6 +30,7 @@ export function createAppServer(
             ? {
                 query: requestUrl.searchParams.get("q"),
                 ...(requestUrl.searchParams.get("unread") === "true" ? { unread: true } : {}),
+                ...(requestUrl.searchParams.has("status") ? { processingState: requestUrl.searchParams.get("status") } : {}),
               }
             : {
                 ...(requestUrl.searchParams.has("sourceId") ? { sourceId: Number(requestUrl.searchParams.get("sourceId")) } : {}),
@@ -37,6 +38,7 @@ export function createAppServer(
                 ...(requestUrl.searchParams.get("interested") === "true" ? { interested: true } : {}),
                 ...(requestUrl.searchParams.get("recommended") === "true" ? { recommended: true } : {}),
                 ...(requestUrl.searchParams.get("unread") === "true" ? { unread: true } : {}),
+                ...(requestUrl.searchParams.has("status") ? { processingState: requestUrl.searchParams.get("status") } : {}),
               }, "web")
         : { ok: true as const, data: [] };
       response.writeHead(200, { "content-type": "application/json" });
