@@ -54,6 +54,25 @@ NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' np
 
 閾値を調整する場合は`NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD`へ`-1`から`1`の値を指定します。モデルや入力形式を変更してベクトルを再生成する場合は、`NEWSZNAC_EMBEDDING_INPUT_VERSION`を新しい値へ変更します。旧ベクトルは保持されますが、現在のモデルと入力版の推薦だけが表示されます。
 
+## 記事を読み進める
+
+Indexの「既読を隠す」が有効な場合、別の記事へ移ると直前の記事が既読になり、Indexから外れます。設定はブラウザーに保存されます。既読記事も含めて探す場合はチェックを外します。本文をスクロールしただけでは既読になりません。
+
+記事ペインでは、二つの読み方を選べます。
+
+- 「保存済み全文を読む」または`Space`で、収集済み本文をアプリ内に表示
+- 「元の記事を開く」または`o`で、公開元を新しいタブに表示
+
+保存済み本文はオフラインでも読めます。公開元を開く場合はネットワーク接続が必要です。
+
+## 記事についてローカルAIに聞く
+
+記事ペイン下部の「この記事について聞く」から、選択中の記事についてLM Studioへ質問できます。タイトル、URL、要約、保存済み本文、同じ記事の過去の問答が文脈としてローカルLLMへ渡されます。質問と回答は記事ごとにSQLiteへ保存され、記事へ戻ったときに復元されます。
+
+「別のAI Chatへの引き継ぎ文」は、記事URL、要約、問答履歴をプレーンテキストへまとめます。内容を画面で確認してコピーし、利用するAI Chatへ自分で貼り付けます。Newzsnacが外部AIサービスへ問答を自動送信することはありません。
+
+LM Studioが停止している場合は問答欄にエラーが表示されますが、Index、保存済み本文、原文を開く操作は利用できます。
+
 ## 主な設定
 
 | 環境変数 | 初期値 | 用途 |
@@ -62,7 +81,8 @@ NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' np
 | `NEWSZNAC_PORT` | `4317` | Web画面のポート |
 | `NEWSZNAC_HOST` | `127.0.0.1` | Web画面の待受先。ループバックのみ |
 | `NEWSZNAC_LM_STUDIO_URL` | `http://127.0.0.1:1234/v1` | LM StudioのOpenAI互換API |
-| `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析と翻訳に使うモデルID |
+| `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析、翻訳、記事問答に使うモデルID |
+| `NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS` | `24000` | 記事問答でLM Studioへ渡す文脈の最大文字数 |
 | `NEWSZNAC_EMBEDDING_MODEL` | 未設定 | 記事ベクトルに使うLM Studioの埋め込みモデルID |
 | `NEWSZNAC_EMBEDDING_MAX_CHARACTERS` | `12000` | 埋め込み入力へ含める最大文字数 |
 | `NEWSZNAC_EMBEDDING_INPUT_VERSION` | `embedding-v1` | 埋め込み入力形式の版。変更すると再生成 |
@@ -85,4 +105,5 @@ CLIとOpenClawからの操作は [docs/openclaw.md](docs/openclaw.md)、SQLite�
 ```sh
 npm test
 openspec validate add-interest-based-recommendations --strict
+openspec validate improve-reading-and-article-chat --strict
 ```

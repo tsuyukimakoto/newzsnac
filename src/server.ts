@@ -27,12 +27,16 @@ export function createAppServer(
       const result = operations
         ? await operations.execute(requestUrl.searchParams.has("q") ? "article.search" : "article.list",
           requestUrl.searchParams.has("q")
-            ? { query: requestUrl.searchParams.get("q") }
+            ? {
+                query: requestUrl.searchParams.get("q"),
+                ...(requestUrl.searchParams.get("unread") === "true" ? { unread: true } : {}),
+              }
             : {
                 ...(requestUrl.searchParams.has("sourceId") ? { sourceId: Number(requestUrl.searchParams.get("sourceId")) } : {}),
                 ...(requestUrl.searchParams.get("saved") === "true" ? { saved: true } : {}),
                 ...(requestUrl.searchParams.get("interested") === "true" ? { interested: true } : {}),
                 ...(requestUrl.searchParams.get("recommended") === "true" ? { recommended: true } : {}),
+                ...(requestUrl.searchParams.get("unread") === "true" ? { unread: true } : {}),
               }, "web")
         : { ok: true as const, data: [] };
       response.writeHead(200, { "content-type": "application/json" });

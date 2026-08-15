@@ -10,6 +10,7 @@ export interface AppConfig {
   readonly recommendationSimilarityThreshold: number;
   readonly analysisPromptVersion: string;
   readonly translationPromptVersion: string;
+  readonly chatContextMaxCharacters: number;
   readonly bindHost: "127.0.0.1" | "::1";
   readonly port: number;
 }
@@ -100,6 +101,7 @@ export function loadConfig(
     recommendationSimilarityThreshold: numberInRange(environment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, 0.75, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
     analysisPromptVersion: nonEmpty(environment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, "analysis-v1", "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
     translationPromptVersion: nonEmpty(environment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, "translate-v1", "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
+    chatContextMaxCharacters: integerInRange(environment.NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS, 24_000, "NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS", 1_000, 100_000),
     bindHost: parseLoopbackHost(environment.NEWSZNAC_HOST),
     port: parsePort(environment.NEWSZNAC_PORT),
   };

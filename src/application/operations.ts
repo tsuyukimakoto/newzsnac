@@ -7,10 +7,13 @@ import { ReadingService } from "../reading/service.js";
 import { SourceResolver, type Fetch } from "../sources/resolver.js";
 import { SourceService, type SourceSettings } from "../sources/service.js";
 import { RecommendationService } from "../recommendation/service.js";
+import { ArticleChatService } from "../chat/service.js";
+import { LmStudioClient } from "../enrichment/client.js";
 
 export const operationNames = [
   "source.resolve", "source.preview", "source.add", "source.pause", "source.resume",
   "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate",
+  "article.chat.list", "article.chat.ask", "article.chat.handoff",
   "dashboard.summary", "runtime.status",
 ] as const;
 
@@ -42,6 +45,7 @@ const mutatingOperations = new Set<OperationName>([
   "source.add", "source.pause", "source.resume", "candidate.dismiss",
   "article.save", "article.read", "article.translate",
   "article.interest",
+  "article.chat.ask",
 ]);
 
 export class ApplicationOperations {
@@ -53,6 +57,7 @@ export class ApplicationOperations {
     private readonly reading: ReadingService,
     private readonly enrichment: EnrichmentService,
     private readonly recommendations: RecommendationService,
+    private readonly chat: ArticleChatService,
     private readonly config: AppConfig,
     private readonly fetcher: Fetch,
   ) {}
@@ -100,14 +105,19 @@ export class ApplicationOperations {
         const saved = optionalBoolean(input, "saved");
         const interested = optionalBoolean(input, "interested");
         const recommended = optionalBoolean(input, "recommended");
+        const unread = optionalBoolean(input, "unread");
         return this.reading.list({
           ...(sourceId === undefined ? {} : { sourceId }),
           ...(saved === undefined ? {} : { saved }),
           ...(interested === undefined ? {} : { interested }),
           ...(recommended === undefined ? {} : { recommended }),
+          ...(unread === undefined ? {} : { unread }),
         });
       }
-      case "article.search": return this.reading.search(text(input, "query"));
+      case "article.search": {
+        const unread = optionalBoolean(input, "unread");
+        return this.reading.search(text(input, "query"), unread === undefined ? {} : { unread });
+      }
       case "article.save": {
         const id = integer(input, "articleId"); const saved = boolean(input, "saved");
         return this.mutate(name, String(id), caller, () => { this.reading.setSaved(id, saved); return { articleId: id, saved }; });
@@ -131,6 +141,15 @@ export class ApplicationOperations {
         const promptVersion = optionalText(input, "promptVersion") ?? this.config.translationPromptVersion;
         return this.mutate(name, String(id), caller, () => this.enrichment.requestTranslation(id, modelId, promptVersion));
       }
+      case "article.chat.list": return this.chat.list(integer(input, "articleId"));
+      case "article.chat.ask": {
+        const id = integer(input, "articleId");
+        const modelId = optionalText(input, "modelId") ?? await this.activeModelId();
+        const result = await this.chat.ask(id, text(input, "question"), modelId);
+        this.audit(name, String(id), caller, "success", { articleId: id, modelId, messageCount: result.messages.length });
+        return result;
+      }
+      case "article.chat.handoff": return { text: this.chat.handoff(integer(input, "articleId")) };
       case "dashboard.summary": return this.dashboardSummary();
       case "runtime.status": return this.runtimeStatus();
     }
@@ -261,9 +280,10 @@ export function createApplicationOperations(database: DatabaseSync, config: AppC
   const resolver = new SourceResolver(fetcher);
   const sources = new SourceService(database, resolver);
   const recommendations = new RecommendationService(database, config);
+  const chat = new ArticleChatService(database, new LmStudioClient(config.lmStudioUrl, fetcher), config.chatContextMaxCharacters);
   return new ApplicationOperations(
     database, resolver, sources, new DiscoveryService(database, resolver, sources),
     new ReadingService(database, config.embeddingModel ?? "__disabled__", config.embeddingInputVersion),
-    new EnrichmentService(database), recommendations, config, fetcher,
+    new EnrichmentService(database), recommendations, chat, config, fetcher,
   );
 }

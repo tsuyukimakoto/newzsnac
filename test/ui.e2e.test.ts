@@ -42,10 +42,14 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
     VALUES (2, 1, 0.91, 'embed-model', 'embedding-v1', ?)
   `).run(timestamp);
   const config = loadConfig({ NEWSZNAC_PORT: "0", NEWSZNAC_EMBEDDING_MODEL: "embed-model" });
+  let chatShouldFail = false;
   const feed = `<?xml version="1.0"?><rss><channel><title>New source</title><item><title>Preview article</title><link>https://example.com/preview</link></item></channel></rss>`;
   const fetcher: Fetch = async (input) => {
     const url = String(input);
     if (url.endsWith("/models")) return Response.json({ data: [{ id: "qwen" }] });
+    if (url.endsWith("/chat/completions")) return chatShouldFail
+      ? new Response("model unavailable", { status: 503 })
+      : Response.json({ choices: [{ message: { content: "この記事の重要点はローカル処理です。" } }] });
     if (url === "https://example.com/feed.xml") return new Response(feed, { headers: { "content-type": "application/rss+xml" } });
     throw new Error(`unexpected request: ${url}`);
   };
@@ -69,6 +73,9 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator(".reader-summary p").textContent(), "First summary");
   assert.deepEqual(await page.locator(".reader-points li").allTextContents(), ["First point", "Second point"]);
   assert.equal(await page.locator(".article-body").count(), 0);
+  assert.equal(await page.locator("#hide-read").isChecked(), true);
+  assert.equal(await page.locator("#original-link").getAttribute("target"), "_blank");
+  assert.match(await page.locator("#original-link").getAttribute("rel") ?? "", /noopener/);
   assert.match(await page.locator(".article-card.selected .publication").textContent() ?? "", /2026\/08\/15/);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/operations/article.interest")),
@@ -82,7 +89,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   ]);
   assert.equal(await page.locator(".article-card h2").textContent(), "First");
   await Promise.all([
-    page.waitForResponse((response) => response.url().endsWith("/api/items")),
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
     page.locator("#filter-all").click(),
   ]);
   const readerScrollBefore = await page.locator("#reader").evaluate((element) => element.scrollTop);
@@ -91,7 +98,16 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator("#reader").evaluate((element) => element.scrollTop), readerScrollBefore);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/operations/article.read")),
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
     page.keyboard.press("j"),
+  ]);
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  assert.equal(await page.locator(".article-card h2", { hasText: "First" }).count(), 0);
+  assert.equal(await page.locator("#visible-count").textContent(), "29件を表示");
+  assert.equal(await page.evaluate(() => localStorage.getItem("newzsnac.hideRead")), "true");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/items")),
+    page.locator("#hide-read").uncheck(),
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
   assert.match(await page.locator(".recommendation-note").textContent() ?? "", /First.*91%/);
@@ -151,6 +167,29 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
     page.locator("#search").press("Enter"),
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "First");
+
+  await page.locator("#chat-question").fill("この記事で最も重要な点は？");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.chat.ask")),
+    page.locator("#article-chat button[type=submit]").click(),
+  ]);
+  assert.equal(await page.locator(".chat-message.assistant .chat-content").textContent(), "この記事の重要点はローカル処理です。");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM article_chat_messages WHERE item_id=1").get()?.count, 2);
+  await page.locator("#handoff-button").click();
+  assert.match(await page.locator("#handoff-text").inputValue(), /https:\/\/example\.com\/1/);
+  assert.match(await page.locator("#handoff-text").inputValue(), /この記事で最も重要な点は？/);
+  await page.reload();
+  assert.equal(await page.locator(".chat-message.assistant .chat-content").textContent(), "この記事の重要点はローカル処理です。");
+  chatShouldFail = true;
+  await page.locator(".article-card", { hasText: "Second" }).click();
+  await page.locator("#chat-question").fill("失敗する質問");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.chat.ask")),
+    page.locator("#article-chat button[type=submit]").click(),
+  ]);
+  assert.match(await page.locator("#article-chat .chat-error").textContent() ?? "", /HTTP 503/);
+  assert.equal(await page.locator(".reader-content h1").textContent(), "Second");
+  assert.equal(database.prepare("SELECT count(*) AS count FROM article_chat_messages WHERE item_id=2").get()?.count, 0);
 
   await page.locator(".discover").click();
   await page.locator("#source-input").fill("https://example.com/feed.xml");

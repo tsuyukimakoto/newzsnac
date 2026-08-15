@@ -1,16 +1,26 @@
 const ROW_HEIGHT = 116;
+const storedHideRead = localStorage.getItem("newzsnac.hideRead");
 const state = {
   items: [], selected: 0, mode: "fast", start: 0, end: 0,
-  loading: false, filter: { type: "all" }, view: "reader", total: null,
+  loading: false, loadGeneration: 0, navigating: false, filter: { type: "all" }, view: "reader", total: null,
+  hideRead: storedHideRead !== "false",
+  chats: new Map(),
 };
+if (storedHideRead === null) localStorage.setItem("newzsnac.hideRead", "true");
 const list = document.querySelector("#article-list");
 const spacer = document.querySelector("#article-spacer");
 const reader = document.querySelector("#reader");
+const hideRead = document.querySelector("#hide-read");
+hideRead.checked = state.hideRead;
 
 function escapeHtml(value = "") {
   return String(value).replace(/[&<>'"]/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;",
   })[character]);
+}
+
+function formatChatText(value = "") {
+  return escapeHtml(value).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
 }
 
 function statusLabel(item) {
@@ -49,7 +59,7 @@ function renderList() {
     card.setAttribute("role", "option");
     card.setAttribute("aria-selected", String(index === state.selected));
     card.innerHTML = `<div class="card-top"><span>${interestLabel(item)}${escapeHtml(item.source || "SOURCE")} · <time class="publication" datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(formatPublishedAt(item.publishedAt))}</time></span>${statusLabel(item)}</div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary || "要約を作成しています…")}</p>`;
-    card.onclick = () => select(index);
+    card.onclick = () => { void moveFocus(index); };
     list.append(card);
   });
 }
@@ -66,10 +76,14 @@ function renderReader() {
   const published = formatPublishedAt(item.publishedAt);
   const recommendation = item.recommendation
     ? `<aside class="recommendation-note"><b>読むべきかも？</b><span>気になった「${escapeHtml(item.recommendation.sourceTitle)}」に内容が近い · 類似度 ${Math.round(item.recommendation.score * 100)}%</span></aside>` : "";
-  const actions = `<div class="reader-actions"><button id="interest-button" type="button" aria-pressed="${item.interest === "interested"}">${item.interest === "interested" ? "◆ 気になった" : "◇ 気になった"} <kbd>i</kbd></button></div>`;
+  const actions = `<div class="reader-actions">
+    <button id="interest-button" type="button" aria-pressed="${item.interest === "interested"}">${item.interest === "interested" ? "◆ 気になった" : "◇ 気になった"} <kbd>i</kbd></button>
+    <button id="stored-content-button" type="button">${state.mode === "deep" ? "要約に戻る" : "保存済み全文を読む"} <kbd>Space</kbd></button>
+    <a id="original-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">元の記事を開く ↗ <kbd>o</kbd></a>
+  </div>`;
   const heading = `<div class="kicker">${escapeHtml(item.source || "ARTICLE")} · <time datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(published)}</time></div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　公開 ${escapeHtml(published)}</div>${actions}${recommendation}`;
   if (state.mode === "deep") {
-    reader.innerHTML = `<div class="reader-content deep-reading">${heading}${item.summary ? `<div class="summary compact">${escapeHtml(item.summary)}</div>` : ""}<div class="body article-body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div></div>`;
+    reader.innerHTML = `<div class="reader-content deep-reading">${heading}${item.summary ? `<div class="summary compact">${escapeHtml(item.summary)}</div>` : ""}<div class="body article-body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div>${chatShell(item)}</div>`;
     bindReaderActions(item);
     return;
   }
@@ -78,14 +92,92 @@ function renderReader() {
   const analysis = item.summary
     ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${reasons ? `<ol>${reasons}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
     : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
-  reader.innerHTML = `<div class="reader-content fast-reading">${heading}${analysis}<button class="deep-mode-button" type="button">全文を読む <kbd>Space</kbd></button><div class="status-line">${statusLabel(item) || "分析済み"}</div></div>`;
-  reader.querySelector(".deep-mode-button").onclick = () => { setMode("deep"); renderReader(); };
+  reader.innerHTML = `<div class="reader-content fast-reading">${heading}${analysis}<div class="status-line">${statusLabel(item) || "分析済み"}</div>${chatShell(item)}</div>`;
   bindReaderActions(item);
 }
 
 function bindReaderActions(item) {
   const button = reader.querySelector("#interest-button");
   if (button) button.onclick = () => toggleInterest(item);
+  const contentButton = reader.querySelector("#stored-content-button");
+  if (contentButton) contentButton.onclick = () => { setMode(state.mode === "deep" ? "fast" : "deep"); renderReader(); };
+  renderChat(item);
+}
+
+function chatShell(item) {
+  return `<section id="article-chat" class="article-chat" data-article-id="${item.id}" aria-label="この記事についてローカルAIと問答"></section>`;
+}
+
+function articleChat(itemId) {
+  if (!state.chats.has(itemId)) state.chats.set(itemId, { messages: [], loaded: false, loading: false, error: "", draft: "", handoff: "", copyStatus: "" });
+  return state.chats.get(itemId);
+}
+
+function renderChat(item) {
+  const node = reader.querySelector(`#article-chat[data-article-id="${item.id}"]`);
+  if (!node) return;
+  const chat = articleChat(item.id);
+  const messages = chat.messages.map((message) => `<div class="chat-message ${message.role}">
+    <div class="chat-role">${message.role === "user" ? "YOU" : "LOCAL AI"}</div>
+    <div class="chat-body"><span class="chat-content">${formatChatText(message.content)}</span>${message.modelId ? `<small class="chat-model">${escapeHtml(message.modelId)}</small>` : ""}</div>
+  </div>`).join("");
+  const conversation = messages || `<div class="chat-empty">記事だけでは腑に落ちない点を、手元のLM Studioに質問できます。</div>`;
+  node.innerHTML = `<div class="chat-head"><div><div class="section-label">LOCAL Q&amp;A</div><h2>この記事について聞く</h2></div><div class="chat-privacy">記事と問答は、このMacのLM Studioだけに送られます。</div></div>
+    <div class="chat-messages">${chat.loaded ? conversation : '<div class="chat-empty">履歴を読み込んでいます…</div>'}</div>
+    <form class="chat-form"><textarea id="chat-question" maxlength="4000" required placeholder="この記事の前提、影響、見落としを質問する">${escapeHtml(chat.draft)}</textarea><div class="chat-form-footer"><span class="chat-hint">回答は記事と保存済み問答を参照します</span><button type="submit" ${chat.loading ? "disabled" : ""}>${chat.loading ? "考えています…" : "ローカルAIに聞く"}</button></div></form>
+    ${chat.error ? `<p class="chat-error" role="alert">${escapeHtml(chat.error)}</p>` : ""}
+    <div class="chat-tools"><span class="chat-hint">別のAIへは自動送信しません</span><button id="handoff-button" type="button" ${chat.loading ? "disabled" : ""}>別のAI Chatへの引き継ぎ文</button></div>
+    ${chat.handoff ? `<div class="handoff-panel"><label for="handoff-text">内容を確認してからコピーしてください</label><textarea id="handoff-text">${escapeHtml(chat.handoff)}</textarea><div class="chat-tools"><span class="copy-status">${escapeHtml(chat.copyStatus)}</span><button id="copy-handoff" type="button">コピー</button></div></div>` : ""}`;
+
+  const question = node.querySelector("#chat-question");
+  question.addEventListener("input", () => { chat.draft = question.value; });
+  node.querySelector(".chat-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const value = chat.draft.trim();
+    if (!value || chat.loading) return;
+    chat.loading = true; chat.error = ""; chat.copyStatus = "";
+    renderChat(item);
+    try {
+      const result = await executeOperation("article.chat.ask", { articleId: item.id, question: value });
+      chat.messages = result.messages || [];
+      chat.loaded = true; chat.draft = ""; chat.handoff = "";
+    } catch (error) {
+      chat.error = error.message;
+    } finally {
+      chat.loading = false;
+      renderChat(item);
+    }
+  });
+  node.querySelector("#handoff-button").onclick = async () => {
+    chat.error = ""; chat.copyStatus = "";
+    try {
+      const result = await executeOperation("article.chat.handoff", { articleId: item.id });
+      chat.handoff = result.text;
+    } catch (error) { chat.error = error.message; }
+    renderChat(item);
+  };
+  const copyButton = node.querySelector("#copy-handoff");
+  if (copyButton) copyButton.onclick = async () => {
+    const text = node.querySelector("#handoff-text").value;
+    try {
+      await navigator.clipboard.writeText(text);
+      chat.copyStatus = "コピーしました";
+    } catch {
+      node.querySelector("#handoff-text").select();
+      chat.copyStatus = "選択しました。⌘Cでコピーできます";
+    }
+    renderChat(item);
+  };
+
+  if (!chat.loaded && !chat.loading) {
+    chat.loading = true;
+    executeOperation("article.chat.list", { articleId: item.id }).then((messagesFromServer) => {
+      chat.messages = messagesFromServer || []; chat.loaded = true; chat.error = "";
+    }).catch((error) => { chat.error = error.message; }).finally(() => {
+      chat.loading = false;
+      if (state.items[state.selected]?.id === item.id) renderChat(item);
+    });
+  }
 }
 
 async function toggleInterest(item) {
@@ -110,6 +202,32 @@ function select(index) {
   document.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
 }
 
+async function moveFocus(index) {
+  if (state.navigating || state.items.length === 0) return;
+  const targetIndex = Math.max(0, Math.min(state.items.length - 1, index));
+  if (targetIndex === state.selected) return;
+  const current = state.items[state.selected];
+  const targetId = state.items[targetIndex]?.id;
+  if (!current || !targetId) return;
+  state.navigating = true;
+  document.querySelector("#stream-error").textContent = "";
+  try {
+    if (!current.isRead) {
+      await executeOperation("article.read", { articleId: current.id, read: true });
+      current.isRead = true;
+      await loadDashboard();
+    }
+    if (state.hideRead) await loadItems(document.querySelector("#search").value.trim(), true, targetId);
+    else select(targetIndex);
+  } catch (error) {
+    current.isRead = false;
+    document.querySelector("#stream-error").textContent = `既読状態を更新できませんでした: ${error.message}`;
+    renderList();
+  } finally {
+    state.navigating = false;
+  }
+}
+
 function setMode(mode) {
   state.mode = mode;
   document.querySelector("#mode").textContent = mode === "deep" ? "精読モード" : "高速モード";
@@ -125,8 +243,8 @@ async function executeOperation(operation, input) {
   return result.data;
 }
 
-async function loadItems(query = "", preservePosition = false) {
-  if (state.loading) return;
+async function loadItems(query = "", preservePosition = false, preferredId = null) {
+  const generation = ++state.loadGeneration;
   state.loading = true;
   try {
     const url = new URL("/api/items", location.origin);
@@ -135,18 +253,22 @@ async function loadItems(query = "", preservePosition = false) {
     if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
     if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
     if (!query && state.filter.type === "recommended") url.searchParams.set("recommended", "true");
+    if (state.hideRead) url.searchParams.set("unread", "true");
     const response = await fetch(url);
     const data = await response.json();
-    const selectedId = preservePosition ? state.items[state.selected]?.id : null;
+    if (generation !== state.loadGeneration) return;
+    const selectedId = preferredId ?? (preservePosition ? state.items[state.selected]?.id : null);
     const scrollTop = list.scrollTop;
     state.items = data.items || [];
-    state.selected = selectedId ? Math.max(0, state.items.findIndex((item) => item.id === selectedId)) : 0;
+    const selectedIndex = selectedId ? state.items.findIndex((item) => item.id === selectedId) : -1;
+    state.selected = selectedIndex >= 0 ? selectedIndex : 0;
     list.scrollTop = preservePosition ? scrollTop : 0;
     document.querySelector("#empty").hidden = state.items.length > 0;
+    document.querySelector("#visible-count").textContent = `${state.items.length}件を表示`;
     renderList();
     renderReader();
   } finally {
-    state.loading = false;
+    if (generation === state.loadGeneration) state.loading = false;
   }
 }
 
@@ -245,14 +367,9 @@ document.addEventListener("keydown", (event) => {
   if (input) { if (event.key === "Escape") input.blur(); return; }
   const item = state.items[state.selected];
   if (event.key === "j") {
-    event.preventDefault();
-    if (item && !item.isRead) {
-      item.isRead = true;
-      executeOperation("article.read", { articleId: item.id, read: true }).then(loadDashboard).catch(() => { item.isRead = false; renderList(); });
-    }
-    select(state.selected + 1);
+    event.preventDefault(); void moveFocus(state.selected + 1);
   } else if (event.key === "k") {
-    event.preventDefault(); select(state.selected - 1);
+    event.preventDefault(); void moveFocus(state.selected - 1);
   } else if (event.code === "Space") {
     event.preventDefault(); setMode(state.mode === "deep" ? "fast" : "deep"); renderReader();
   } else if (event.key === "/") {
@@ -264,11 +381,15 @@ document.addEventListener("keydown", (event) => {
     toggleInterest(item);
   } else if (event.key === "u" && item) {
     const before = item.isRead; item.isRead = !before; renderList();
-    executeOperation("article.read", { articleId: item.id, read: item.isRead }).then(loadDashboard).catch(() => { item.isRead = before; renderList(); });
+    const nextId = state.items[state.selected + 1]?.id ?? state.items[state.selected - 1]?.id ?? null;
+    executeOperation("article.read", { articleId: item.id, read: item.isRead }).then(async () => {
+      await loadDashboard();
+      if (state.hideRead && item.isRead) await loadItems(document.querySelector("#search").value.trim(), true, nextId);
+    }).catch(() => { item.isRead = before; renderList(); });
   } else if (event.key === "t" && item) {
     const before = item.translationStatus; item.translationStatus = "pending"; renderList(); renderReader();
     executeOperation("article.translate", { articleId: item.id }).catch(() => { item.translationStatus = before; renderList(); renderReader(); });
-  } else if (event.key === "o" && item?.url) open(item.url, "_blank", "noopener");
+  } else if (event.key === "o" && item?.url) open(item.url, "_blank", "noopener,noreferrer");
 });
 
 const searchInput = document.querySelector("#search");
@@ -279,6 +400,12 @@ document.querySelector("#filter-all").onclick = (event) => { state.filter = { ty
 document.querySelector("#filter-saved").onclick = (event) => { state.filter = { type: "saved" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-interested").onclick = (event) => { state.filter = { type: "interested" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-recommended").onclick = (event) => { state.filter = { type: "recommended" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+hideRead.addEventListener("change", () => {
+  state.hideRead = hideRead.checked;
+  localStorage.setItem("newzsnac.hideRead", String(state.hideRead));
+  document.querySelector("#stream-error").textContent = "";
+  void loadItems(document.querySelector("#search").value.trim(), true);
+});
 document.querySelector("#new-count").onclick = (event) => { event.currentTarget.hidden = true; state.view = "reader"; loadItems(); };
 document.querySelector(".discover").addEventListener("click", showSourceManager);
 new ResizeObserver(renderList).observe(list);

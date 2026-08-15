@@ -42,6 +42,7 @@ test("scrolling alone stays unread while defined actions update state", () => {
     assert.equal(reading.list()[0]?.isRead, false);
     reading.advanceFrom(1);
     assert.equal(reading.list()[0]?.isRead, true);
+    assert.deepEqual(reading.list({ unread: true }).map((item) => item.id), []);
     reading.setSaved(1, true);
     reading.setInterest(1, "interested");
     assert.equal(reading.list()[0]?.isSaved, true);

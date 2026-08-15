@@ -29,7 +29,13 @@
       </aside>
       <section class="stream" aria-label="記事一覧">
         <header class="stream-head"><div><span class="section-label">INBOX</span><h1>今日の読みもの</h1></div><button id="sort">おすすめ順⌄</button></header>
-        <div class="stream-meta"><span id="unread-count">未読 0</span><span id="reading-time">約 0分</span></div>
+        <div class="stream-meta">
+          <span id="unread-count">未読 0</span>
+          <label class="read-toggle"><input id="hide-read" type="checkbox">既読を隠す</label>
+          <span id="visible-count">0件を表示</span>
+          <span id="reading-time">約 0分</span>
+          <span id="stream-error" class="stream-error" aria-live="polite"></span>
+        </div>
         <div id="article-list" class="article-list" role="listbox" tabindex="0"><div id="article-spacer"></div></div>
         <div id="empty" class="empty"><b>収集した記事はまだありません</b><span>左下の「情報源を追加」から購読先を登録してください。</span></div>
       </section>

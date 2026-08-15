@@ -14,6 +14,7 @@ test("loadConfig returns local-first defaults", () => {
   assert.equal(config.recommendationSimilarityThreshold, 0.75);
   assert.equal(config.analysisPromptVersion, "analysis-v1");
   assert.equal(config.translationPromptVersion, "translate-v1");
+  assert.equal(config.chatContextMaxCharacters, 24_000);
   assert.equal(config.bindHost, "127.0.0.1");
   assert.equal(config.port, 4317);
 });
@@ -51,4 +52,9 @@ test("loadConfig validates embedding configuration", () => {
   assert.throws(() => loadConfig({ NEWSZNAC_EMBEDDING_MODEL: " " }), /must not be empty/);
   assert.throws(() => loadConfig({ NEWSZNAC_EMBEDDING_MAX_CHARACTERS: "999" }), /1000 through 100000/);
   assert.throws(() => loadConfig({ NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD: "1.1" }), /-1 through 1/);
+});
+
+test("loadConfig validates the local chat context limit", () => {
+  assert.equal(loadConfig({ NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS: "36000" }).chatContextMaxCharacters, 36_000);
+  assert.throws(() => loadConfig({ NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS: "999" }), /1000 through 100000/);
 });

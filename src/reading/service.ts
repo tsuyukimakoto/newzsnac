@@ -99,7 +99,7 @@ export class ReadingService {
 
   setInterest(itemId: number, interest: Interest): void { this.upsertState(itemId, { interest }); }
 
-  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; interested?: boolean; recommended?: boolean } = {}): readonly ArticleListItem[] {
+  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean } = {}): readonly ArticleListItem[] {
     const sort = options.sort ?? "newest";
     const order = {
       newest: "i.published_at DESC, i.id DESC",
@@ -107,7 +107,7 @@ export class ReadingService {
       source: "coalesce(min(s.display_name), ''), i.published_at DESC, i.id DESC",
       oldest: "i.published_at ASC, i.id ASC",
     }[sort];
-    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)"];
+    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)", "(? = 0 OR coalesce(u.is_read, 0) = 0)"];
     const baseline = options.baselineAt?.toISOString() ?? null;
     const sourceId = options.sourceId ?? null;
     const rows = this.database.prepare(`
@@ -136,7 +136,7 @@ export class ReadingService {
       GROUP BY i.id
       ORDER BY ${options.recommended ? "r.score DESC, i.published_at DESC, i.id DESC" : order}
     `).all(this.recommendationModel, this.embeddingInputVersion, baseline, baseline, sourceId, sourceId,
-      Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false)) as unknown as ArticleRow[];
+      Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false)) as unknown as ArticleRow[];
     const articles = rows.map(mapArticle);
     if (options.timeBudgetMinutes === undefined) return articles;
     let remaining = options.timeBudgetMinutes;
@@ -147,7 +147,7 @@ export class ReadingService {
     });
   }
 
-  search(query: string): readonly ArticleListItem[] {
+  search(query: string, options: { unread?: boolean } = {}): readonly ArticleListItem[] {
     if (!query.trim()) return [];
     const rows = this.database.prepare(`
       WITH matches AS (
@@ -176,8 +176,9 @@ export class ReadingService {
       LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
         AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
       LEFT JOIN items ri ON ri.id = r.source_item_id
+      WHERE (? = 0 OR coalesce(u.is_read, 0) = 0)
       GROUP BY i.id ORDER BY i.id DESC
-    `).all(query, this.recommendationModel, this.embeddingInputVersion) as unknown as ArticleRow[];
+    `).all(query, this.recommendationModel, this.embeddingInputVersion, Number(options.unread ?? false)) as unknown as ArticleRow[];
     return rows.map(mapArticle);
   }
 

@@ -1,6 +1,11 @@
 import type { Fetch } from "../sources/resolver.js";
 import { analysisJsonSchema, validateAnalysis, type AnalysisResult } from "./schema.js";
 
+export interface ChatCompletionMessage {
+  readonly role: "system" | "user" | "assistant";
+  readonly content: string;
+}
+
 export class LmStudioClient {
   constructor(
     private readonly endpoint: URL,
@@ -42,6 +47,21 @@ export class LmStudioClient {
     const translated = body.choices?.[0]?.message?.content;
     if (!translated) throw new Error("LM Studio response did not contain a translation");
     return translated;
+  }
+
+  async chat(model: string, messages: readonly ChatCompletionMessage[]): Promise<string> {
+    const url = new URL(`${this.endpoint.pathname.replace(/\/$/, "")}/chat/completions`, this.endpoint);
+    const response = await this.fetcher(url, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, temperature: 0.2, max_tokens: 4_096, stream: false, messages }),
+    });
+    if (!response.ok) throw new Error(`LM Studio chat returned HTTP ${response.status}: ${(await response.text()).slice(0, 1_000)}`);
+    const body = await response.json() as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> };
+    const choice = body.choices?.[0];
+    const answer = choice?.message?.content?.trim();
+    if (!answer && choice?.finish_reason === "length") throw new Error("LM Studio ran out of output tokens before producing an answer");
+    if (!answer) throw new Error("LM Studio response did not contain an answer");
+    return answer;
   }
 
   async embed(model: string, input: string): Promise<Float32Array> {
