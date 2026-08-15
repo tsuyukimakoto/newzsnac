@@ -8,6 +8,7 @@ import { LmStudioClient } from "../enrichment/client.js";
 import { EnrichmentService, EnrichmentWorker } from "../enrichment/service.js";
 import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
 import type { Fetch } from "../sources/resolver.js";
+import { RecommendationService } from "../recommendation/service.js";
 
 interface SourceSettingsRow {
   base_priority: number;
@@ -44,7 +45,10 @@ export async function runCollectionCycle(
       const itemId = repository.save(sourceId, item, extracted);
       const hasContent = Boolean(extracted ?? item.feedContent);
       if (!hasContent) repository.markExtractionFailed(itemId);
-      if (hasContent) enrichment.ensureAnalysisQueued(itemId, source.base_priority, item.publishedAt ?? null, clock());
+      if (hasContent) {
+        enrichment.ensureAnalysisQueued(itemId, source.base_priority, item.publishedAt ?? null, clock());
+        new RecommendationService(database, _config).ensureEmbeddingQueued(itemId);
+      }
     }
   };
   const coordinator = new CollectionCoordinator(database, [
@@ -76,7 +80,9 @@ export async function runAnalysisCycle(
     database,
     new LmStudioClient(config.lmStudioUrl, fetcher),
     `analysis-${process.pid}`,
+    new RecommendationService(database, config),
   );
+  new RecommendationService(database, config).enqueueMissingEmbeddings(maxJobs);
   let processed = 0;
   while (processed < maxJobs && await worker.runOne(modelId, config.analysisPromptVersion)) {
     processed += 1;

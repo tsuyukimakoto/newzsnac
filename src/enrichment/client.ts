@@ -43,4 +43,21 @@ export class LmStudioClient {
     if (!translated) throw new Error("LM Studio response did not contain a translation");
     return translated;
   }
+
+  async embed(model: string, input: string): Promise<Float32Array> {
+    const url = new URL(`${this.endpoint.pathname.replace(/\/$/, "")}/embeddings`, this.endpoint);
+    const response = await this.fetcher(url, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model, input }),
+    });
+    if (!response.ok) throw new Error(`LM Studio embeddings returned HTTP ${response.status}: ${(await response.text()).slice(0, 1_000)}`);
+    const body = await response.json() as { data?: Array<{ embedding?: unknown }> };
+    const value = body.data?.[0]?.embedding;
+    if (!Array.isArray(value) || value.length === 0 || !value.every((entry) => typeof entry === "number" && Number.isFinite(entry))) {
+      throw new Error("LM Studio response did not contain a finite embedding vector");
+    }
+    const vector = Float32Array.from(value as number[]);
+    if (![...vector].every(Number.isFinite)) throw new Error("LM Studio embedding exceeds Float32 range");
+    return vector;
+  }
 }

@@ -37,7 +37,11 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
     VALUES (?, 'analysis', 'qwen', 'v1', ?, ?, 80, ?, 'article', 'en', ?)
   `);
   insertAnalysis.run(1, "First summary", '["AI","Research"]', '["First point","Second point"]', timestamp);
-  const config = loadConfig({ NEWSZNAC_PORT: "0" });
+  database.prepare(`
+    INSERT INTO item_recommendations(target_item_id, source_item_id, score, model_id, input_version, calculated_at)
+    VALUES (2, 1, 0.91, 'embed-model', 'embedding-v1', ?)
+  `).run(timestamp);
+  const config = loadConfig({ NEWSZNAC_PORT: "0", NEWSZNAC_EMBEDDING_MODEL: "embed-model" });
   const feed = `<?xml version="1.0"?><rss><channel><title>New source</title><item><title>Preview article</title><link>https://example.com/preview</link></item></channel></rss>`;
   const fetcher: Fetch = async (input) => {
     const url = String(input);
@@ -61,11 +65,26 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
 
   assert.equal(await page.locator(".reader-content h1").textContent(), "First");
   assert.equal(await page.locator("#total-count").textContent(), "30");
-  assert.equal(await page.locator("#runtime-status").textContent(), "SQLite · LM Studio (qwen)");
+  assert.equal(await page.locator("#runtime-status").textContent(), "SQLite · LM Studio (qwen) · 推薦 1");
   assert.equal(await page.locator(".reader-summary p").textContent(), "First summary");
   assert.deepEqual(await page.locator(".reader-points li").allTextContents(), ["First point", "Second point"]);
   assert.equal(await page.locator(".article-body").count(), 0);
   assert.match(await page.locator(".article-card.selected .publication").textContent() ?? "", /2026\/08\/15/);
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.interest")),
+    page.locator("#interest-button").click(),
+  ]);
+  assert.equal(database.prepare("SELECT interest FROM item_user_states WHERE item_id=1").get()?.interest, "interested");
+  assert.equal(await page.locator("#interest-button").getAttribute("aria-pressed"), "true");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/items?interested=true")),
+    page.locator("#filter-interested").click(),
+  ]);
+  assert.equal(await page.locator(".article-card h2").textContent(), "First");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/items")),
+    page.locator("#filter-all").click(),
+  ]);
   const readerScrollBefore = await page.locator("#reader").evaluate((element) => element.scrollTop);
   await page.locator("#article-list").evaluate((element) => { element.scrollTop = 500; element.dispatchEvent(new Event("scroll")); });
   assert.ok(await page.locator("#article-list").evaluate((element) => element.scrollTop) > 0);
@@ -75,6 +94,21 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
     page.keyboard.press("j"),
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  assert.match(await page.locator(".recommendation-note").textContent() ?? "", /First.*91%/);
+  await page.locator("#article-list").focus();
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.interest")),
+    page.keyboard.press("i"),
+  ]);
+  assert.equal(database.prepare("SELECT interest FROM item_user_states WHERE item_id=2").get()?.interest, "interested");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.interest")),
+    page.locator("#interest-button").click(),
+  ]);
+  assert.equal(database.prepare("SELECT interest FROM item_user_states WHERE item_id=2").get()?.interest, null);
+  const interestState = database.prepare("SELECT is_read,is_saved FROM item_user_states WHERE item_id=2").get();
+  assert.equal(interestState?.is_read, 0);
+  assert.equal(interestState?.is_saved, 0);
   await page.locator("#search").focus();
   await page.keyboard.type("j");
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");

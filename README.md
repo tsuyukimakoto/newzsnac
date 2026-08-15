@@ -40,6 +40,20 @@ NEWSZNAC_LM_STUDIO_MODEL='実際のモデルID' npm start
 
 画面左下に `SQLite · LM Studio (モデルID)` と表示されれば接続済みです。`LM Studio 未接続` の場合、分析ジョブは SQLite に残り、接続後に再試行されます。
 
+## 気になった記事と「読むべきかも？」
+
+記事ペインの「気になった」または`i`キーで、保存・既読とは別に関心を記録できます。左側の「気になった」から後で一覧できます。
+
+内容が近い未読記事へ「読むべきかも？」を表示するには、LM Studioで埋め込みモデルを読み込み、そのモデルIDを指定して起動します。埋め込みにはOpenAI互換の`/v1/embeddings`を使い、記事本文とベクトルはこの端末の外へ送りません。
+
+```sh
+NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' npm start
+```
+
+初回起動後は新しい記事から順に背景でベクトル化します。「気になった」記事と類似度0.75以上の未読記事が「読むべきかも？」へ現れ、根拠になった記事名と類似度を確認できます。埋め込みモデルを停止しても、収集、閲覧、検索、関心フラグの変更は継続します。再起動後に未処理ジョブが再試行されます。
+
+閾値を調整する場合は`NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD`へ`-1`から`1`の値を指定します。モデルや入力形式を変更してベクトルを再生成する場合は、`NEWSZNAC_EMBEDDING_INPUT_VERSION`を新しい値へ変更します。旧ベクトルは保持されますが、現在のモデルと入力版の推薦だけが表示されます。
+
 ## 主な設定
 
 | 環境変数 | 初期値 | 用途 |
@@ -49,6 +63,10 @@ NEWSZNAC_LM_STUDIO_MODEL='実際のモデルID' npm start
 | `NEWSZNAC_HOST` | `127.0.0.1` | Web画面の待受先。ループバックのみ |
 | `NEWSZNAC_LM_STUDIO_URL` | `http://127.0.0.1:1234/v1` | LM StudioのOpenAI互換API |
 | `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析と翻訳に使うモデルID |
+| `NEWSZNAC_EMBEDDING_MODEL` | 未設定 | 記事ベクトルに使うLM Studioの埋め込みモデルID |
+| `NEWSZNAC_EMBEDDING_MAX_CHARACTERS` | `12000` | 埋め込み入力へ含める最大文字数 |
+| `NEWSZNAC_EMBEDDING_INPUT_VERSION` | `embedding-v1` | 埋め込み入力形式の版。変更すると再生成 |
+| `NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD` | `0.75` | 「読むべきかも？」に表示する最低類似度 |
 | `NEWSZNAC_ANALYSIS_PROMPT_VERSION` | `analysis-v1` | 分析結果のプロンプト版 |
 | `NEWSZNAC_TRANSLATION_PROMPT_VERSION` | `translate-v1` | 翻訳結果のプロンプト版 |
 
@@ -66,5 +84,5 @@ CLIとOpenClawからの操作は [docs/openclaw.md](docs/openclaw.md)、SQLite�
 
 ```sh
 npm test
-openspec validate build-personal-news-reader --strict
+openspec validate add-interest-based-recommendations --strict
 ```

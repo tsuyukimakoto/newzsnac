@@ -19,6 +19,8 @@
         <nav id="sources">
           <button class="source active" id="filter-all"><span>すべての記事</span><b id="total-count">0</b></button>
           <button class="source" id="filter-saved"><span>保存済み</span><b id="saved-count">0</b></button>
+          <button class="source" id="filter-interested"><span>気になった</span><b id="interested-count">0</b></button>
+          <button class="source" id="filter-recommended"><span>読むべきかも？</span><b id="recommended-count">0</b></button>
           <div class="rule"></div>
           <div id="source-list"></div>
         </nav>
@@ -35,7 +37,7 @@
         <div class="reader-empty"><span class="big-mark">N</span><p>記事を選ぶと、ここに本文を表示します。</p><kbd>j</kbd><span>で次の記事へ</span></div>
       </article>
     </main>
-    <footer class="keybar"><span><kbd>j</kbd><kbd>k</kbd> 移動</span><span><kbd>Space</kbd> 精読</span><span><kbd>s</kbd> 保存</span><span><kbd>u</kbd> 未読</span><span><kbd>t</kbd> 翻訳</span><span><kbd>o</kbd> 原文</span><span><kbd>/</kbd> 検索</span><span class="mode" id="mode">高速モード</span></footer>
+    <footer class="keybar"><span><kbd>j</kbd><kbd>k</kbd> 移動</span><span><kbd>Space</kbd> 精読</span><span><kbd>i</kbd> 気になった</span><span><kbd>s</kbd> 保存</span><span><kbd>u</kbd> 未読</span><span><kbd>t</kbd> 翻訳</span><span><kbd>o</kbd> 原文</span><span><kbd>/</kbd> 検索</span><span class="mode" id="mode">高速モード</span></footer>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

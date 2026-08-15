@@ -18,7 +18,7 @@ test("migrations, WAL, FTS, concurrent connections, leases, and backup restore",
   context.after(() => second.close());
 
   assert.equal(first.prepare("PRAGMA journal_mode").get()?.journal_mode, "wal");
-  assert.equal(first.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 6);
+  assert.equal(first.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 7);
 
   const now = "2026-08-15T00:00:00.000Z";
   const sourceId = Number(first.prepare(`
@@ -33,6 +33,10 @@ test("migrations, WAL, FTS, concurrent connections, leases, and backup restore",
     INSERT INTO source_items(source_id, item_id, source_url, discovered_at)
     VALUES (?, ?, 'https://example.com/story', ?)
   `).run(sourceId, itemId, now);
+  first.prepare(`
+    INSERT INTO item_embeddings(item_id, model_id, input_version, input_hash, dimensions, vector, l2_norm, embedded_at)
+    VALUES (?, 'embedding-model', 'embedding-v1', 'hash', 2, ?, 1, ?)
+  `).run(itemId, Buffer.from(new Float32Array([1, 0]).buffer), now);
 
   const search = first.prepare(
     "SELECT rowid FROM item_search WHERE item_search MATCH 'offline'",
@@ -58,6 +62,7 @@ test("migrations, WAL, FTS, concurrent connections, leases, and backup restore",
     assert.equal(restored.prepare("SELECT count(*) AS count FROM sources").get()?.count, 1);
     assert.equal(restored.prepare("SELECT count(*) AS count FROM items").get()?.count, 1);
     assert.equal(restored.prepare("SELECT count(*) AS count FROM jobs").get()?.count, 2);
+    assert.equal(restored.prepare("SELECT count(*) AS count FROM item_embeddings").get()?.count, 1);
   } finally {
     restored.close();
   }

@@ -255,4 +255,37 @@ export const migrations: readonly Migration[] = [
         AND last_error = 'LM Studio returned HTTP 400';
     `,
   },
+  {
+    version: 7,
+    name: "item_embeddings_and_recommendations",
+    sql: `
+      CREATE TABLE item_embeddings (
+        item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        model_id TEXT NOT NULL,
+        input_version TEXT NOT NULL,
+        input_hash TEXT NOT NULL,
+        dimensions INTEGER NOT NULL CHECK (dimensions > 0),
+        vector BLOB NOT NULL,
+        l2_norm REAL NOT NULL CHECK (l2_norm > 0),
+        embedded_at TEXT NOT NULL,
+        PRIMARY KEY (item_id, model_id, input_version)
+      );
+      CREATE INDEX item_embeddings_model_idx
+        ON item_embeddings(model_id, input_version, item_id);
+
+      CREATE TABLE item_recommendations (
+        target_item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+        source_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+        score REAL NOT NULL CHECK (score >= -1 AND score <= 1),
+        model_id TEXT NOT NULL,
+        input_version TEXT NOT NULL,
+        calculated_at TEXT NOT NULL,
+        CHECK (target_item_id <> source_item_id)
+      );
+      CREATE INDEX item_recommendations_source_idx
+        ON item_recommendations(source_item_id, target_item_id);
+      CREATE INDEX item_recommendations_score_idx
+        ON item_recommendations(score DESC, target_item_id DESC);
+    `,
+  },
 ];

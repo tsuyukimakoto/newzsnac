@@ -1,5 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
+import { loadConfig } from "./config.js";
+import { openDatabase } from "./db/database.js";
 
 const entries = [
   ["server.js"],
@@ -9,6 +11,9 @@ const entries = [
 
 const children: ChildProcess[] = [];
 let stopping = false;
+
+const bootstrapDatabase = openDatabase(loadConfig().databasePath);
+bootstrapDatabase.close();
 
 function stop(signal: NodeJS.Signals = "SIGTERM"): void {
   if (stopping) return;

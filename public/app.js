@@ -18,7 +18,12 @@ function statusLabel(item) {
   if (item.translationStatus === "ready") return '<span class="badge ready">翻訳済み</span>';
   if (item.translationStatus === "pending") return '<span class="badge">翻訳中</span>';
   if (!item.summary) return '<span class="badge">要約準備中</span>';
+  if (item.recommendation) return '<span class="badge recommendation-badge">読むべきかも？</span>';
   return "";
+}
+
+function interestLabel(item) {
+  return item.interest === "interested" ? '<span class="interest-mark" aria-label="気になった">◆</span>' : "";
 }
 
 function formatPublishedAt(value) {
@@ -39,11 +44,11 @@ function renderList() {
   state.items.slice(state.start, state.end).forEach((item, offset) => {
     const index = state.start + offset;
     const card = document.createElement("div");
-    card.className = `article-card ${index === state.selected ? "selected" : ""} ${item.isRead ? "read" : ""}`;
+    card.className = `article-card ${index === state.selected ? "selected" : ""} ${item.isRead ? "read" : ""} ${item.interest === "interested" ? "interested" : ""} ${item.recommendation ? "recommended" : ""}`;
     card.style.transform = `translateY(${index * ROW_HEIGHT}px)`;
     card.setAttribute("role", "option");
     card.setAttribute("aria-selected", String(index === state.selected));
-    card.innerHTML = `<div class="card-top"><span>${escapeHtml(item.source || "SOURCE")} · <time class="publication" datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(formatPublishedAt(item.publishedAt))}</time></span>${statusLabel(item)}</div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary || "要約を作成しています…")}</p>`;
+    card.innerHTML = `<div class="card-top"><span>${interestLabel(item)}${escapeHtml(item.source || "SOURCE")} · <time class="publication" datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(formatPublishedAt(item.publishedAt))}</time></span>${statusLabel(item)}</div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary || "要約を作成しています…")}</p>`;
     card.onclick = () => select(index);
     list.append(card);
   });
@@ -59,9 +64,13 @@ function renderReader() {
   }
   reader.classList.add("open");
   const published = formatPublishedAt(item.publishedAt);
-  const heading = `<div class="kicker">${escapeHtml(item.source || "ARTICLE")} · <time datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(published)}</time></div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　公開 ${escapeHtml(published)}</div>`;
+  const recommendation = item.recommendation
+    ? `<aside class="recommendation-note"><b>読むべきかも？</b><span>気になった「${escapeHtml(item.recommendation.sourceTitle)}」に内容が近い · 類似度 ${Math.round(item.recommendation.score * 100)}%</span></aside>` : "";
+  const actions = `<div class="reader-actions"><button id="interest-button" type="button" aria-pressed="${item.interest === "interested"}">${item.interest === "interested" ? "◆ 気になった" : "◇ 気になった"} <kbd>i</kbd></button></div>`;
+  const heading = `<div class="kicker">${escapeHtml(item.source || "ARTICLE")} · <time datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(published)}</time></div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　公開 ${escapeHtml(published)}</div>${actions}${recommendation}`;
   if (state.mode === "deep") {
     reader.innerHTML = `<div class="reader-content deep-reading">${heading}${item.summary ? `<div class="summary compact">${escapeHtml(item.summary)}</div>` : ""}<div class="body article-body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div></div>`;
+    bindReaderActions(item);
     return;
   }
   const labels = (item.labels || []).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
@@ -71,6 +80,26 @@ function renderReader() {
     : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
   reader.innerHTML = `<div class="reader-content fast-reading">${heading}${analysis}<button class="deep-mode-button" type="button">全文を読む <kbd>Space</kbd></button><div class="status-line">${statusLabel(item) || "分析済み"}</div></div>`;
   reader.querySelector(".deep-mode-button").onclick = () => { setMode("deep"); renderReader(); };
+  bindReaderActions(item);
+}
+
+function bindReaderActions(item) {
+  const button = reader.querySelector("#interest-button");
+  if (button) button.onclick = () => toggleInterest(item);
+}
+
+async function toggleInterest(item) {
+  const before = item.interest;
+  item.interest = before === "interested" ? null : "interested";
+  renderList(); renderReader();
+  try {
+    await executeOperation("article.interest", { articleId: item.id, interested: item.interest === "interested" });
+    await loadDashboard();
+    if (state.filter.type === "interested" || state.filter.type === "recommended") await loadItems("", true);
+  } catch {
+    item.interest = before;
+    renderList(); renderReader();
+  }
 }
 
 function select(index) {
@@ -104,6 +133,8 @@ async function loadItems(query = "", preservePosition = false) {
     if (query) url.searchParams.set("q", query);
     if (!query && state.filter.type === "source") url.searchParams.set("sourceId", state.filter.id);
     if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
+    if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
+    if (!query && state.filter.type === "recommended") url.searchParams.set("recommended", "true");
     const response = await fetch(url);
     const data = await response.json();
     const selectedId = preservePosition ? state.items[state.selected]?.id : null;
@@ -142,6 +173,8 @@ async function loadDashboard() {
   state.total = total;
   document.querySelector("#total-count").textContent = total;
   document.querySelector("#saved-count").textContent = summary.saved || 0;
+  document.querySelector("#interested-count").textContent = summary.interested || 0;
+  document.querySelector("#recommended-count").textContent = summary.recommended || 0;
   document.querySelector("#unread-count").textContent = `未読 ${summary.unread || 0}`;
   document.querySelector("#reading-time").textContent = formatMinutes(summary.readingMinutes || 0);
   const sourceList = document.querySelector("#source-list");
@@ -162,7 +195,7 @@ async function loadDashboard() {
   const connected = runtime.lmStudio === "connected";
   document.querySelector("#runtime-dot").classList.toggle("warning", !connected);
   document.querySelector("#runtime-status").textContent = connected
-    ? `SQLite · LM Studio (${runtime.activeModel || runtime.configuredModel})`
+    ? `SQLite · LM Studio (${runtime.activeModel || runtime.configuredModel})${runtime.embedding?.configured ? ` · 推薦 ${runtime.embedding.recommendations}` : " · 埋め込み未設定"}`
     : `SQLite · LM Studio 未接続 (${runtime.configuredModel || "qwen"})`;
 }
 
@@ -227,6 +260,8 @@ document.addEventListener("keydown", (event) => {
   } else if (event.key === "s" && item) {
     const before = item.isSaved; item.isSaved = !before; renderList();
     executeOperation("article.save", { articleId: item.id, saved: item.isSaved }).then(loadDashboard).catch(() => { item.isSaved = before; renderList(); });
+  } else if (event.key === "i" && item) {
+    toggleInterest(item);
   } else if (event.key === "u" && item) {
     const before = item.isRead; item.isRead = !before; renderList();
     executeOperation("article.read", { articleId: item.id, read: item.isRead }).then(loadDashboard).catch(() => { item.isRead = before; renderList(); });
@@ -242,6 +277,8 @@ searchInput.addEventListener("keydown", (event) => {
 });
 document.querySelector("#filter-all").onclick = (event) => { state.filter = { type: "all" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-saved").onclick = (event) => { state.filter = { type: "saved" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+document.querySelector("#filter-interested").onclick = (event) => { state.filter = { type: "interested" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+document.querySelector("#filter-recommended").onclick = (event) => { state.filter = { type: "recommended" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#new-count").onclick = (event) => { event.currentTarget.hidden = true; state.view = "reader"; loadItems(); };
 document.querySelector(".discover").addEventListener("click", showSourceManager);
 new ResizeObserver(renderList).observe(list);

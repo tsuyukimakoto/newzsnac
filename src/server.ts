@@ -31,6 +31,8 @@ export function createAppServer(
             : {
                 ...(requestUrl.searchParams.has("sourceId") ? { sourceId: Number(requestUrl.searchParams.get("sourceId")) } : {}),
                 ...(requestUrl.searchParams.get("saved") === "true" ? { saved: true } : {}),
+                ...(requestUrl.searchParams.get("interested") === "true" ? { interested: true } : {}),
+                ...(requestUrl.searchParams.get("recommended") === "true" ? { recommended: true } : {}),
               }, "web")
         : { ok: true as const, data: [] };
       response.writeHead(200, { "content-type": "application/json" });

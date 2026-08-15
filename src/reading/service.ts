@@ -9,6 +9,7 @@ export interface ArticleListItem {
   readonly canonicalUrl: string;
   readonly isRead: boolean;
   readonly isSaved: boolean;
+  readonly interest: Interest;
   readonly priority: number | null;
   readonly estimatedReadingMinutes: number;
   readonly author: string | null;
@@ -21,6 +22,7 @@ export interface ArticleListItem {
   readonly extractionStatus: string;
   readonly translationStatus: "ready" | "pending" | null;
   readonly url: string;
+  readonly recommendation: { readonly sourceItemId: number; readonly sourceTitle: string; readonly score: number } | null;
 }
 
 interface ArticleRow {
@@ -29,6 +31,7 @@ interface ArticleRow {
   canonical_url: string;
   is_read: number | null;
   is_saved: number | null;
+  interest: Interest;
   priority: number | null;
   estimated_reading_minutes: number | null;
   author: string | null;
@@ -40,6 +43,9 @@ interface ArticleRow {
   source: string | null;
   extraction_status: string;
   translation_status: "ready" | "pending" | null;
+  recommendation_source_id: number | null;
+  recommendation_source_title: string | null;
+  recommendation_score: number | null;
 }
 
 function timestamp(date = new Date()): string { return date.toISOString(); }
@@ -57,7 +63,7 @@ function stringArray(value: string | null): readonly string[] {
 function mapArticle(row: ArticleRow): ArticleListItem {
   return {
     id: row.id, title: row.title, canonicalUrl: row.canonical_url,
-    isRead: Boolean(row.is_read), isSaved: Boolean(row.is_saved), priority: row.priority,
+    isRead: Boolean(row.is_read), isSaved: Boolean(row.is_saved), interest: row.interest, priority: row.priority,
     estimatedReadingMinutes: row.estimated_reading_minutes ?? 5,
     author: row.author, publishedAt: row.published_at,
     content: row.content,
@@ -68,11 +74,20 @@ function mapArticle(row: ArticleRow): ArticleListItem {
     extractionStatus: row.extraction_status,
     translationStatus: row.translation_status,
     url: row.canonical_url,
+    recommendation: row.recommendation_source_id === null || row.recommendation_score === null ? null : {
+      sourceItemId: row.recommendation_source_id,
+      sourceTitle: row.recommendation_source_title ?? "関心記事",
+      score: row.recommendation_score,
+    },
   };
 }
 
 export class ReadingService {
-  constructor(private readonly database: DatabaseSync) {}
+  constructor(
+    private readonly database: DatabaseSync,
+    private readonly recommendationModel = "__disabled__",
+    private readonly embeddingInputVersion = "__disabled__",
+  ) {}
 
   setRead(itemId: number, read: boolean, now = new Date()): void {
     this.upsertState(itemId, { isRead: read, readAt: read ? timestamp(now) : null });
@@ -84,7 +99,7 @@ export class ReadingService {
 
   setInterest(itemId: number, interest: Interest): void { this.upsertState(itemId, { interest }); }
 
-  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean } = {}): readonly ArticleListItem[] {
+  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; interested?: boolean; recommended?: boolean } = {}): readonly ArticleListItem[] {
     const sort = options.sort ?? "newest";
     const order = {
       newest: "i.published_at DESC, i.id DESC",
@@ -92,11 +107,11 @@ export class ReadingService {
       source: "coalesce(min(s.display_name), ''), i.published_at DESC, i.id DESC",
       oldest: "i.published_at ASC, i.id ASC",
     }[sort];
-    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)"];
+    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)"];
     const baseline = options.baselineAt?.toISOString() ?? null;
     const sourceId = options.sourceId ?? null;
     const rows = this.database.prepare(`
-      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved,
+      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved, u.interest,
         max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
@@ -107,15 +122,21 @@ export class ReadingService {
           WHEN EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='translation' AND j.status IN ('pending','running','retry_wait')) THEN 'pending'
           ELSE NULL
         END AS translation_status
+        ,r.source_item_id AS recommendation_source_id, ri.title AS recommendation_source_title,
+        r.score AS recommendation_score
       FROM items i
       LEFT JOIN item_user_states u ON u.item_id = i.id
       LEFT JOIN item_analyses a ON a.item_id = i.id AND a.kind = 'analysis'
       LEFT JOIN source_items si ON si.item_id = i.id
       LEFT JOIN sources s ON s.id = si.source_id
+      LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
+        AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
+      LEFT JOIN items ri ON ri.id = r.source_item_id
       WHERE ${conditions.join(" AND ")}
       GROUP BY i.id
-      ORDER BY ${order}
-    `).all(baseline, baseline, sourceId, sourceId, Number(options.saved ?? false)) as unknown as ArticleRow[];
+      ORDER BY ${options.recommended ? "r.score DESC, i.published_at DESC, i.id DESC" : order}
+    `).all(this.recommendationModel, this.embeddingInputVersion, baseline, baseline, sourceId, sourceId,
+      Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false)) as unknown as ArticleRow[];
     const articles = rows.map(mapArticle);
     if (options.timeBudgetMinutes === undefined) return articles;
     let remaining = options.timeBudgetMinutes;
@@ -133,7 +154,7 @@ export class ReadingService {
         SELECT rowid
         FROM item_search WHERE item_search MATCH ?
       )
-      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved,
+      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved, u.interest,
         max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
@@ -144,14 +165,19 @@ export class ReadingService {
           WHEN EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='translation' AND j.status IN ('pending','running','retry_wait')) THEN 'pending'
           ELSE NULL
         END AS translation_status
+        ,r.source_item_id AS recommendation_source_id, ri.title AS recommendation_source_title,
+        r.score AS recommendation_score
       FROM matches m
       JOIN items i ON i.id = m.rowid
       LEFT JOIN item_user_states u ON u.item_id = i.id
       LEFT JOIN item_analyses a ON a.item_id = i.id AND a.kind = 'analysis'
       LEFT JOIN source_items si ON si.item_id = i.id
       LEFT JOIN sources s ON s.id = si.source_id
+      LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
+        AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
+      LEFT JOIN items ri ON ri.id = r.source_item_id
       GROUP BY i.id ORDER BY i.id DESC
-    `).all(query) as unknown as ArticleRow[];
+    `).all(query, this.recommendationModel, this.embeddingInputVersion) as unknown as ArticleRow[];
     return rows.map(mapArticle);
   }
 

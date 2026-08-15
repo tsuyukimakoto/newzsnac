@@ -6,7 +6,9 @@ import { migrations } from "./migrations.js";
 export function openDatabase(path: string): DatabaseSync {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const database = new DatabaseSync(path);
-  database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL;");
+  database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
+  const journalMode = String(database.prepare("PRAGMA journal_mode").get()?.journal_mode ?? "").toLowerCase();
+  if (path !== ":memory:" && journalMode !== "wal") database.exec("PRAGMA journal_mode = WAL;");
   migrate(database);
   return database;
 }

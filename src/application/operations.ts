@@ -6,10 +6,11 @@ import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
 import { ReadingService } from "../reading/service.js";
 import { SourceResolver, type Fetch } from "../sources/resolver.js";
 import { SourceService, type SourceSettings } from "../sources/service.js";
+import { RecommendationService } from "../recommendation/service.js";
 
 export const operationNames = [
   "source.resolve", "source.preview", "source.add", "source.pause", "source.resume",
-  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.translate",
+  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate",
   "dashboard.summary", "runtime.status",
 ] as const;
 
@@ -40,6 +41,7 @@ function integer(input: Record<string, unknown>, key: string): number {
 const mutatingOperations = new Set<OperationName>([
   "source.add", "source.pause", "source.resume", "candidate.dismiss",
   "article.save", "article.read", "article.translate",
+  "article.interest",
 ]);
 
 export class ApplicationOperations {
@@ -50,6 +52,7 @@ export class ApplicationOperations {
     private readonly discovery: DiscoveryService,
     private readonly reading: ReadingService,
     private readonly enrichment: EnrichmentService,
+    private readonly recommendations: RecommendationService,
     private readonly config: AppConfig,
     private readonly fetcher: Fetch,
   ) {}
@@ -95,9 +98,13 @@ export class ApplicationOperations {
       case "article.list": {
         const sourceId = optionalInteger(input, "sourceId");
         const saved = optionalBoolean(input, "saved");
+        const interested = optionalBoolean(input, "interested");
+        const recommended = optionalBoolean(input, "recommended");
         return this.reading.list({
           ...(sourceId === undefined ? {} : { sourceId }),
           ...(saved === undefined ? {} : { saved }),
+          ...(interested === undefined ? {} : { interested }),
+          ...(recommended === undefined ? {} : { recommended }),
         });
       }
       case "article.search": return this.reading.search(text(input, "query"));
@@ -108,6 +115,15 @@ export class ApplicationOperations {
       case "article.read": {
         const id = integer(input, "articleId"); const read = boolean(input, "read");
         return this.mutate(name, String(id), caller, () => { this.reading.setRead(id, read); return { articleId: id, read }; });
+      }
+      case "article.interest": {
+        const id = integer(input, "articleId"); const interested = boolean(input, "interested");
+        return this.mutate(name, String(id), caller, () => {
+          const interest = interested ? "interested" : null;
+          this.reading.setInterest(id, interest);
+          this.recommendations.onInterestChanged(id, interest);
+          return { articleId: id, interested };
+        });
       }
       case "article.translate": {
         const id = integer(input, "articleId");
@@ -120,18 +136,23 @@ export class ApplicationOperations {
     }
   }
 
-  private dashboardSummary(): { total: number; unread: number; saved: number; readingMinutes: number } {
+  private dashboardSummary(): { total: number; unread: number; saved: number; interested: number; recommended: number; readingMinutes: number } {
     const row = this.database.prepare(`
       SELECT count(*) AS total,
         sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
         sum(CASE WHEN coalesce(u.is_saved, 0) = 1 THEN 1 ELSE 0 END) AS saved,
+        sum(CASE WHEN u.interest = 'interested' THEN 1 ELSE 0 END) AS interested,
+        sum(CASE WHEN r.target_item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL THEN 1 ELSE 0 END) AS recommended,
         sum(CASE WHEN coalesce(u.is_read, 0) = 0 THEN coalesce(i.estimated_reading_minutes, 5) ELSE 0 END) AS reading_minutes
       FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
-    `).get();
+      LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
+    `).get(this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion);
     return {
       total: Number(row?.total ?? 0),
       unread: Number(row?.unread ?? 0),
       saved: Number(row?.saved ?? 0),
+      interested: Number(row?.interested ?? 0),
+      recommended: Number(row?.recommended ?? 0),
       readingMinutes: Number(row?.reading_minutes ?? 0),
     };
   }
@@ -151,16 +172,27 @@ export class ApplicationOperations {
   }
 
   private async runtimeStatus(): Promise<unknown> {
+    const embeddingCounts = this.database.prepare(`
+      SELECT count(*) AS embedded,
+        (SELECT count(*) FROM jobs WHERE type = 'embedding' AND status IN ('pending','running','retry_wait')) AS pending,
+        (SELECT count(*) FROM item_recommendations WHERE model_id = ? AND input_version = ?) AS recommendations
+      FROM item_embeddings WHERE model_id = ? AND input_version = ?
+    `).get(this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion,
+      this.config.embeddingModel ?? "__disabled__", this.config.embeddingInputVersion);
     try {
       const models = await listLocalModels(this.config.lmStudioUrl, this.fetcher);
       return {
         sqlite: "connected", lmStudio: "connected", configuredModel: this.config.lmStudioModel,
         activeModel: selectLoadedModel(this.config.lmStudioModel, models), models,
+        embedding: { configured: Boolean(this.config.embeddingModel), model: this.config.embeddingModel,
+          embedded: Number(embeddingCounts?.embedded ?? 0), pending: Number(embeddingCounts?.pending ?? 0), recommendations: Number(embeddingCounts?.recommendations ?? 0) },
       };
     } catch (error) {
       return {
         sqlite: "connected", lmStudio: "unavailable", configuredModel: this.config.lmStudioModel,
         message: error instanceof Error ? error.message : String(error),
+        embedding: { configured: Boolean(this.config.embeddingModel), model: this.config.embeddingModel,
+          embedded: Number(embeddingCounts?.embedded ?? 0), pending: Number(embeddingCounts?.pending ?? 0), recommendations: Number(embeddingCounts?.recommendations ?? 0) },
       };
     }
   }
@@ -228,8 +260,10 @@ function targetFor(operation: OperationName, rawInput: unknown): string {
 export function createApplicationOperations(database: DatabaseSync, config: AppConfig, fetcher: Fetch = globalThis.fetch): ApplicationOperations {
   const resolver = new SourceResolver(fetcher);
   const sources = new SourceService(database, resolver);
+  const recommendations = new RecommendationService(database, config);
   return new ApplicationOperations(
     database, resolver, sources, new DiscoveryService(database, resolver, sources),
-    new ReadingService(database), new EnrichmentService(database), config, fetcher,
+    new ReadingService(database, config.embeddingModel ?? "__disabled__", config.embeddingInputVersion),
+    new EnrichmentService(database), recommendations, config, fetcher,
   );
 }

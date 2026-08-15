@@ -4,6 +4,10 @@ export interface AppConfig {
   readonly databasePath: string;
   readonly lmStudioUrl: URL;
   readonly lmStudioModel: string;
+  readonly embeddingModel: string | null;
+  readonly embeddingMaxCharacters: number;
+  readonly embeddingInputVersion: string;
+  readonly recommendationSimilarityThreshold: number;
   readonly analysisPromptVersion: string;
   readonly translationPromptVersion: string;
   readonly bindHost: "127.0.0.1" | "::1";
@@ -49,6 +53,28 @@ function nonEmpty(value: string | undefined, fallback: string, name: string): st
   return actual.trim();
 }
 
+function optionalNonEmpty(value: string | undefined, name: string): string | null {
+  if (value === undefined) return null;
+  if (!value.trim()) throw new Error(`${name} must not be empty when set`);
+  return value.trim();
+}
+
+function integerInRange(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number): number {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be an integer from ${minimum} through ${maximum}`);
+  }
+  return parsed;
+}
+
+function numberInRange(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number): number {
+  const parsed = value === undefined ? fallback : Number(value);
+  if (!Number.isFinite(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be a number from ${minimum} through ${maximum}`);
+  }
+  return parsed;
+}
+
 export function loadConfig(
   environment: ConfigEnvironment = process.env,
   workingDirectory = process.cwd(),
@@ -68,6 +94,10 @@ export function loadConfig(
     databasePath,
     lmStudioUrl: parseLmStudioUrl(environment.NEWSZNAC_LM_STUDIO_URL),
     lmStudioModel: nonEmpty(environment.NEWSZNAC_LM_STUDIO_MODEL, "qwen", "NEWSZNAC_LM_STUDIO_MODEL"),
+    embeddingModel: optionalNonEmpty(environment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
+    embeddingMaxCharacters: integerInRange(environment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, 12_000, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
+    embeddingInputVersion: nonEmpty(environment.NEWSZNAC_EMBEDDING_INPUT_VERSION, "embedding-v1", "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
+    recommendationSimilarityThreshold: numberInRange(environment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, 0.75, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
     analysisPromptVersion: nonEmpty(environment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, "analysis-v1", "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
     translationPromptVersion: nonEmpty(environment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, "translate-v1", "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
     bindHost: parseLoopbackHost(environment.NEWSZNAC_HOST),

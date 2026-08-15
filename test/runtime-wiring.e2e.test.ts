@@ -45,7 +45,7 @@ test("runtime workers collect into SQLite, enqueue analysis, and persist LM resu
     assert.equal(analysis.processed, 1);
     assert.equal(database.prepare("SELECT summary_ja FROM item_analyses").get()?.summary_ja, "実際の要約");
     const dashboard = await operations.execute("dashboard.summary", {}, "web");
-    assert.deepEqual(dashboard.ok && dashboard.data, { total: 1, unread: 1, saved: 0, readingMinutes: 1 });
+    assert.deepEqual(dashboard.ok && dashboard.data, { total: 1, unread: 1, saved: 0, interested: 0, recommended: 0, readingMinutes: 1 });
     const articles = await operations.execute("article.list", {}, "web");
     assert.equal(articles.ok && (articles.data as readonly { summary: string }[])[0]?.summary, "実際の要約");
   } finally {
@@ -61,7 +61,13 @@ test("dashboard operations return only persisted counts and sources", async () =
     const operations = createApplicationOperations(database, config, fetcher);
     const empty = await operations.execute("dashboard.summary", {}, "web");
     assert.equal(empty.ok, true);
-    assert.deepEqual(empty.ok && empty.data, { total: 0, unread: 0, saved: 0, readingMinutes: 0 });
+    assert.deepEqual(empty.ok && empty.data, { total: 0, unread: 0, saved: 0, interested: 0, recommended: 0, readingMinutes: 0 });
+
+    const runtime = await operations.execute("runtime.status", {}, "web");
+    assert.equal(runtime.ok, true);
+    assert.deepEqual(runtime.ok && (runtime.data as { embedding: unknown }).embedding, {
+      configured: false, model: null, embedded: 0, pending: 0, recommendations: 0,
+    });
 
     const sources = await operations.execute("source.list", {}, "web");
     assert.equal(sources.ok, true);
@@ -69,4 +75,42 @@ test("dashboard operations return only persisted counts and sources", async () =
   } finally {
     database.close();
   }
+});
+
+test("collection, local embeddings, explicit interest, recommendation, and removal flow end to end", async () => {
+  const database = openDatabase(":memory:");
+  try {
+    const relatedFeed = `<?xml version="1.0"?><rss><channel><title>Related feed</title>
+      <item><title>Local AI design</title><link>https://example.com/ai-design</link><description>Local model architecture</description></item>
+      <item><title>Local AI implementation</title><link>https://example.com/ai-code</link><description>Local model implementation</description></item>
+    </channel></rss>`;
+    const fetcher: Fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "https://example.com/related.xml") return new Response(relatedFeed, { headers: { "content-type": "application/rss+xml" } });
+      if (url.startsWith("https://example.com/ai-")) return new Response(`<article>${url} local AI details</article>`);
+      if (url.endsWith("/models")) return Response.json({ data: [{ id: "qwen" }, { id: "embed-model" }] });
+      if (url.endsWith("/chat/completions")) return Response.json({ choices: [{ message: { content: JSON.stringify({
+        summaryJa: "ローカルAIの記事", labels: ["AI"], priority: 80, reasons: ["関心に近い"], itemType: "article", originalLanguage: "en",
+      }) } }] });
+      if (url.endsWith("/embeddings")) {
+        const body = JSON.parse(String(init?.body)) as { input: string };
+        return Response.json({ data: [{ embedding: body.input.includes("Local AI") ? [1, 0.05] : [0, 1] }] });
+      }
+      throw new Error(`unexpected request: ${url}`);
+    };
+    const config = loadConfig({ NEWSZNAC_EMBEDDING_MODEL: "embed-model", NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD: "0.8" });
+    const operations = createApplicationOperations(database, config, fetcher);
+    assert.equal((await operations.execute("source.add", { input: "https://example.com/related.xml" }, "web")).ok, true);
+    assert.equal((await runCollectionCycle(database, config, fetcher)).collected, 2);
+    await runAnalysisCycle(database, config, fetcher, 50);
+
+    const ids = database.prepare("SELECT id FROM items ORDER BY id").all().map((row) => Number(row.id));
+    assert.equal((await operations.execute("article.interest", { articleId: ids[0], interested: true }, "web")).ok, true);
+    await runAnalysisCycle(database, config, fetcher, 50);
+    const recommended = await operations.execute("article.list", { recommended: true }, "web");
+    assert.deepEqual(recommended.ok && (recommended.data as readonly { id: number }[]).map((item) => item.id), [ids[1]]);
+
+    assert.equal((await operations.execute("article.interest", { articleId: ids[0], interested: false }, "web")).ok, true);
+    assert.equal(database.prepare("SELECT count(*) AS count FROM item_recommendations").get()?.count, 0);
+  } finally { database.close(); }
 });

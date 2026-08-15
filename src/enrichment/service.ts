@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { JobQueue } from "../db/jobs.js";
 import { LmStudioClient } from "./client.js";
+import type { RecommendationService } from "../recommendation/service.js";
 
 export function deterministicPreScore(basePriority: number, publishedAt: string | null, now = new Date()): number {
   const ageHours = publishedAt ? Math.max(0, (now.getTime() - Date.parse(publishedAt)) / 3_600_000) : 168;
@@ -50,12 +51,25 @@ export class EnrichmentWorker {
     private readonly database: DatabaseSync,
     private readonly client: LmStudioClient,
     private readonly owner: string,
+    private readonly recommendations?: RecommendationService,
   ) { this.queue = new JobQueue(database); }
 
   async runOne(modelId: string, promptVersion: string, now = new Date()): Promise<boolean> {
     const job = this.queue.claim(this.owner, 5 * 60_000, now);
     if (!job) return false;
     try {
+      if (job.type === "embedding") {
+        if (!this.recommendations) throw new Error("Recommendation service is unavailable");
+        await this.recommendations.processEmbeddingJob(job, this.client, now);
+        this.queue.complete(job.id, this.owner, now);
+        return true;
+      }
+      if (job.type === "recommendation") {
+        if (!this.recommendations) throw new Error("Recommendation service is unavailable");
+        this.recommendations.processRecommendationJob(job, now);
+        this.queue.complete(job.id, this.owner, now);
+        return true;
+      }
       const item = this.database.prepare("SELECT title, coalesce(extracted_content, feed_content) AS content FROM items WHERE id = ?").get(job.itemId);
       if (!item?.content) throw new Error("Item content is unavailable");
       if (job.type === "analysis") {
@@ -70,6 +84,7 @@ export class EnrichmentWorker {
             original_language=excluded.original_language, analyzed_at=excluded.analyzed_at
         `).run(job.itemId, modelId, promptVersion, result.summaryJa, JSON.stringify(result.labels), result.priority,
           JSON.stringify(result.reasons), result.itemType, result.originalLanguage, now.toISOString());
+        this.recommendations?.ensureEmbeddingQueued(job.itemId!);
       } else if (job.type === "translation") {
         const payload = job.payload as { modelId?: string; promptVersion?: string };
         const actualModel = payload.modelId ?? modelId; const actualPrompt = payload.promptVersion ?? promptVersion;

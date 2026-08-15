@@ -48,11 +48,30 @@ test("web, CLI, and OpenClaw-equivalent CLI share validation, deduplication, tra
   });
   assert.equal(invalidTransition.status, 400);
 
+  const now = new Date().toISOString();
+  const articleId = Number(database.prepare(`
+    INSERT INTO items(canonical_url, title, discovered_at, created_at, updated_at)
+    VALUES ('https://example.com/interest', 'Interesting', ?, ?, ?)
+  `).run(now, now, now).lastInsertRowid);
+  const interested = cli("cli", "article.interest", { articleId, interested: true });
+  assert.equal(interested.status, 0, interested.stderr);
+  assert.equal(database.prepare("SELECT interest FROM item_user_states WHERE item_id = ?").get(articleId)?.interest, "interested");
+  const cleared = await fetch(`http://127.0.0.1:${address.port}/api/operations/article.interest`, {
+    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ articleId, interested: false }),
+  }).then((response) => response.json()) as { ok: boolean };
+  assert.equal(cleared.ok, true);
+  assert.equal(database.prepare("SELECT interest FROM item_user_states WHERE item_id = ?").get(articleId)?.interest, null);
+  const invalidInterest = await operations.execute("article.interest", { articleId, interested: "yes" }, "web");
+  assert.equal(invalidInterest.ok, false);
+
   const history = database.prepare("SELECT action, caller, result FROM action_history ORDER BY id").all();
   assert.deepEqual(history.map((row) => [row.action, row.caller, row.result]), [
     ["source.add", "web", "success"],
     ["source.add", "cli", "success"],
     ["source.pause", "openclaw", "success"],
     ["source.pause", "web", "error"],
+    ["article.interest", "cli", "success"],
+    ["article.interest", "web", "success"],
+    ["article.interest", "web", "error"],
   ]);
 });

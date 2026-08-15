@@ -44,13 +44,14 @@ npm run cli -- candidate.dismiss '{"candidateId":4}' --caller openclaw
 npm run cli -- article.search '{"query":"SQLite AND local"}' --caller openclaw
 npm run cli -- article.save '{"articleId":42,"saved":true}' --caller openclaw
 npm run cli -- article.read '{"articleId":42,"read":true}' --caller openclaw
+npm run cli -- article.interest '{"articleId":42,"interested":true}' --caller openclaw
 npm run cli -- article.translate '{"articleId":42,"modelId":"qwen","promptVersion":"translate-v1"}' --caller openclaw
 ```
 
 ## 入力規則
 
 - IDは1以上の整数
-- `saved`と`read`は真偽値
+- `saved`、`read`、`interested`は真偽値
 - 検索語、モデルID、プロンプト版、情報源入力は空でない文字列
 - 情報源追加は解決済みURLを受け取らず、`input`を共通の情報源解決処理で検証
 - 重複する情報源追加は新規作成せず、既存IDと状態を返却
