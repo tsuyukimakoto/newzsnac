@@ -362,9 +362,17 @@ function showSourceManager() {
 }
 
 list.addEventListener("scroll", () => requestAnimationFrame(renderList));
+function isTextEntryKey(event) {
+  if (event.isComposing || event.key === "Process" || event.keyCode === 229) return true;
+  const selector = "input,textarea,select,[contenteditable=true]";
+  const path = typeof event.composedPath === "function" ? event.composedPath() : [event.target];
+  const eventComesFromEditor = path.some((node) => node instanceof Element && node.matches(selector));
+  const activeEditor = document.activeElement instanceof Element && document.activeElement.matches(selector);
+  return eventComesFromEditor || activeEditor;
+}
+
 document.addEventListener("keydown", (event) => {
-  const input = event.target.closest?.("input,textarea,select,[contenteditable=true]");
-  if (input) { if (event.key === "Escape") input.blur(); return; }
+  if (isTextEntryKey(event)) return;
   const item = state.items[state.selected];
   if (event.key === "j") {
     event.preventDefault(); void moveFocus(state.selected + 1);

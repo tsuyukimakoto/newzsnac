@@ -111,6 +111,17 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
   assert.match(await page.locator(".recommendation-note").textContent() ?? "", /First.*91%/);
+  const chatQuestion = page.locator("#chat-question");
+  await chatQuestion.fill("日本語入力中 j k / s i u t o");
+  await chatQuestion.press("Escape");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "chat-question");
+  const titleBeforeComposition = await page.locator(".reader-content h1").textContent();
+  await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", {
+    key: "j", code: "KeyJ", bubbles: true, isComposing: true,
+  })));
+  await page.waitForTimeout(50);
+  assert.equal(await page.locator(".reader-content h1").textContent(), titleBeforeComposition);
+  assert.equal(database.prepare("SELECT is_read FROM item_user_states WHERE item_id=2").get()?.is_read ?? 0, 0);
   await page.locator("#article-list").focus();
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/operations/article.interest")),
