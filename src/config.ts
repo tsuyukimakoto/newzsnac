@@ -11,6 +11,7 @@ export interface AppConfig {
   readonly embeddingInputVersion: string;
   readonly recommendationSimilarityThreshold: number;
   readonly analysisPromptVersion: string;
+  readonly analysisMaxCharacters: number;
   readonly translationPromptVersion: string;
   readonly chatContextMaxCharacters: number;
   readonly bindHost: "127.0.0.1" | "::1";
@@ -28,6 +29,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   embeddingInputVersion: "embedding-v1",
   recommendationSimilarityThreshold: 0.86,
   analysisPromptVersion: "analysis-v2",
+  analysisMaxCharacters: 12_000,
   translationPromptVersion: "translate-v1",
   chatContextMaxCharacters: 24_000,
   bindHost: "127.0.0.1" as const,
@@ -121,6 +123,7 @@ export function loadConfig(
     embeddingInputVersion: nonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_INPUT_VERSION, CONFIG_DEFAULTS.embeddingInputVersion, "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
     recommendationSimilarityThreshold: numberInRange(actualEnvironment.NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD, CONFIG_DEFAULTS.recommendationSimilarityThreshold, "NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD", -1, 1),
     analysisPromptVersion: nonEmpty(actualEnvironment.NEWSZNAC_ANALYSIS_PROMPT_VERSION, CONFIG_DEFAULTS.analysisPromptVersion, "NEWSZNAC_ANALYSIS_PROMPT_VERSION"),
+    analysisMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_ANALYSIS_MAX_CHARACTERS, CONFIG_DEFAULTS.analysisMaxCharacters, "NEWSZNAC_ANALYSIS_MAX_CHARACTERS", 1_000, 100_000),
     translationPromptVersion: nonEmpty(actualEnvironment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, CONFIG_DEFAULTS.translationPromptVersion, "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
     chatContextMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS, CONFIG_DEFAULTS.chatContextMaxCharacters, "NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS", 1_000, 100_000),
     bindHost: parseLoopbackHost(actualEnvironment.NEWSZNAC_HOST),

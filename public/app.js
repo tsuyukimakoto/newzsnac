@@ -27,6 +27,7 @@ function formatChatText(value = "") {
 
 function statusLabel(item) {
   if (item.extractionStatus === "failed") return '<span class="badge failed">本文取得失敗</span>';
+  if (item.processingState === "analysis_failed") return '<span class="badge failed">分析失敗</span>';
   if (item.translationStatus === "ready") return '<span class="badge ready">翻訳済み</span>';
   if (item.translationStatus === "pending") return '<span class="badge">翻訳中</span>';
   if (!item.summary) return '<span class="badge">要約準備中</span>';
@@ -98,6 +99,8 @@ function renderReader() {
     const retryError = state.retryErrors.get(item.id) || "";
     const analysis = item.processingState === "failed"
       ? `<section class="extraction-failed"><span class="failure-mark">!</span><div><div class="section-label">RETRIEVAL FAILED</div><h2>本文を取得できませんでした</h2><p>元の記事が一時的に応答しなかった可能性があります。再取得すると、成功後は「準備中」へ移動します。</p><button id="retry-article" type="button" ${retrying ? "disabled" : ""}>${retrying ? "再取得しています…" : "本文を再取得"}</button><p class="retry-error" role="alert" ${retryError ? "" : "hidden"}>${escapeHtml(retryError)}</p></div></section>`
+      : item.processingState === "analysis_failed"
+      ? `<section class="extraction-failed analysis-failed"><span class="failure-mark">!</span><div><div class="section-label">ANALYSIS FAILED</div><h2>要約を作成できませんでした</h2><p>LM Studioの応答を処理できませんでした。再試行すると「準備中」へ戻り、保存済み本文からもう一度分析します。</p><button id="retry-article" type="button" ${retrying ? "disabled" : ""}>${retrying ? "再試行しています…" : "分析を再試行"}</button><p class="retry-error" role="alert" ${retryError ? "" : "hidden"}>${escapeHtml(retryError)}</p></div></section>`
       : item.summary
       ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${keyPoints ? `<ol>${keyPoints}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
       : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
@@ -132,7 +135,8 @@ async function retryArticle(item) {
   state.retryErrors.delete(item.id);
   renderReader();
   try {
-    const result = await executeOperation("article.retry", { articleId: item.id });
+    const operation = item.processingState === "analysis_failed" ? "article.analysis.retry" : "article.retry";
+    const result = await executeOperation(operation, { articleId: item.id });
     await loadDashboard();
     const nextFilter = result.processingState === "ready" ? "all" : result.processingState;
     state.filter = { type: nextFilter };
@@ -373,7 +377,7 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
   try {
     const url = new URL("/api/items", location.origin);
     if (query) url.searchParams.set("q", query);
-    if (state.filter.type === "pending" || state.filter.type === "failed") url.searchParams.set("status", state.filter.type);
+    if (["pending", "failed", "analysis_failed"].includes(state.filter.type)) url.searchParams.set("status", state.filter.type);
     if (!query && state.filter.type === "source") url.searchParams.set("sourceId", state.filter.id);
     if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
     if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
@@ -414,6 +418,7 @@ const streamContexts = {
   all: { kicker: "INBOX", title: "今日の読みもの", emptyTitle: "読める記事はまだありません", emptyDetail: "分析が終わった記事はここに表示されます。" },
   pending: { kicker: "PROCESSING", title: "準備中", emptyTitle: "準備中の記事はありません", emptyDetail: "新しい記事を取得すると、分析が終わるまでここに表示されます。" },
   failed: { kicker: "RETRIEVAL", title: "取得失敗", emptyTitle: "取得に失敗した記事はありません", emptyDetail: "本文を取得できなかった記事だけがここに表示されます。" },
+  analysis_failed: { kicker: "ANALYSIS", title: "分析失敗", emptyTitle: "分析に失敗した記事はありません", emptyDetail: "再試行上限に達した記事だけがここに表示されます。" },
 };
 
 function renderStreamContext() {
@@ -451,6 +456,7 @@ async function loadDashboard() {
   document.querySelector("#recommended-count").textContent = summary.recommended || 0;
   document.querySelector("#pending-count").textContent = summary.pending || 0;
   document.querySelector("#failed-count").textContent = summary.failed || 0;
+  document.querySelector("#analysis-failed-count").textContent = summary.analysisFailed || 0;
   document.querySelector("#unread-count").textContent = `未読 ${summary.unread || 0}`;
   document.querySelector("#reading-time").textContent = formatMinutes(summary.readingMinutes || 0);
   const sourceList = document.querySelector("#source-list");
@@ -561,6 +567,7 @@ searchInput.addEventListener("keydown", (event) => {
 document.querySelector("#filter-all").onclick = (event) => { state.filter = { type: "all" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-pending").onclick = (event) => { state.filter = { type: "pending" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-failed").onclick = (event) => { state.filter = { type: "failed" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+document.querySelector("#filter-analysis_failed").onclick = (event) => { state.filter = { type: "analysis_failed" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-saved").onclick = (event) => { state.filter = { type: "saved" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-interested").onclick = (event) => { state.filter = { type: "interested" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-recommended").onclick = (event) => { state.filter = { type: "recommended" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };

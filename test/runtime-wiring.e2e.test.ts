@@ -45,7 +45,7 @@ test("runtime workers collect into SQLite, enqueue analysis, and persist LM resu
     assert.equal(analysis.processed, 1);
     assert.equal(database.prepare("SELECT summary_ja FROM item_analyses").get()?.summary_ja, "実際の要約");
     const dashboard = await operations.execute("dashboard.summary", {}, "web");
-    assert.deepEqual(dashboard.ok && dashboard.data, { total: 1, unread: 1, saved: 0, interested: 0, recommended: 0, pending: 0, failed: 0, readingMinutes: 1 });
+    assert.deepEqual(dashboard.ok && dashboard.data, { total: 1, unread: 1, saved: 0, interested: 0, recommended: 0, pending: 0, failed: 0, analysisFailed: 0, readingMinutes: 1 });
     const articles = await operations.execute("article.list", {}, "web");
     assert.equal(articles.ok && (articles.data as readonly { summary: string }[])[0]?.summary, "実際の要約");
   } finally {
@@ -61,7 +61,7 @@ test("dashboard operations return only persisted counts and sources", async () =
     const operations = createApplicationOperations(database, config, fetcher);
     const empty = await operations.execute("dashboard.summary", {}, "web");
     assert.equal(empty.ok, true);
-    assert.deepEqual(empty.ok && empty.data, { total: 0, unread: 0, saved: 0, interested: 0, recommended: 0, pending: 0, failed: 0, readingMinutes: 0 });
+    assert.deepEqual(empty.ok && empty.data, { total: 0, unread: 0, saved: 0, interested: 0, recommended: 0, pending: 0, failed: 0, analysisFailed: 0, readingMinutes: 0 });
 
     const runtime = await operations.execute("runtime.status", {}, "web");
     assert.equal(runtime.ok, true);

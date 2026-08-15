@@ -31,6 +31,40 @@ export class EnrichmentService {
     return existing ? null : this.enqueueAnalysis(itemId, basePriority, publishedAt, now);
   }
 
+  retryAnalysis(itemId: number, now = new Date()): { articleId: number; retried: boolean; processingState: "ready" | "pending" } {
+    const item = this.database.prepare(`
+      SELECT extraction_status, coalesce(extracted_content, feed_content) AS content,
+        EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id = items.id AND a.kind = 'analysis') AS analysed
+      FROM items WHERE id = ?
+    `).get(itemId);
+    if (!item) throw new Error("Article not found");
+    if (item.extraction_status === "failed" || !String(item.content ?? "").trim()) {
+      throw new Error("Article content is unavailable");
+    }
+    if (item.analysed) return { articleId: itemId, retried: false, processingState: "ready" };
+
+    const active = this.database.prepare(`
+      SELECT 1 FROM jobs WHERE item_id = ? AND type = 'analysis'
+        AND status IN ('pending', 'running', 'retry_wait') LIMIT 1
+    `).get(itemId);
+    if (active) return { articleId: itemId, retried: false, processingState: "pending" };
+
+    const failed = this.database.prepare(`
+      SELECT id FROM jobs WHERE item_id = ? AND type = 'analysis' AND status = 'failed'
+      ORDER BY id DESC LIMIT 1
+    `).get(itemId);
+    if (failed) {
+      this.database.prepare(`
+        UPDATE jobs SET status = 'pending', attempts = 0, available_at = ?,
+          lease_owner = NULL, lease_expires_at = NULL, last_error = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now.toISOString(), now.toISOString(), Number(failed.id));
+    } else {
+      this.enqueueAnalysis(itemId, 50, null, now);
+    }
+    return { articleId: itemId, retried: true, processingState: "pending" };
+  }
+
   requestTranslation(itemId: number, modelId: string, promptVersion: string): { status: "ready"; content: string } | { status: "queued"; jobId: number } {
     const cached = this.database.prepare(`
       SELECT translated_content FROM item_analyses

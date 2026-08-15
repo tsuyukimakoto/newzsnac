@@ -13,7 +13,7 @@ import { ArticleRecoveryService } from "../collection/recovery.js";
 
 export const operationNames = [
   "source.resolve", "source.preview", "source.add", "source.pause", "source.resume",
-  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate", "article.retry",
+  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate", "article.retry", "article.analysis.retry",
   "article.chat.list", "article.chat.ask", "article.chat.handoff",
   "dashboard.summary", "runtime.status",
 ] as const;
@@ -47,6 +47,7 @@ const mutatingOperations = new Set<OperationName>([
   "article.save", "article.read", "article.translate",
   "article.interest",
   "article.retry",
+  "article.analysis.retry",
   "article.chat.ask",
 ]);
 
@@ -156,6 +157,10 @@ export class ApplicationOperations {
         this.audit(name, String(id), caller, "success", result);
         return result;
       }
+      case "article.analysis.retry": {
+        const id = integer(input, "articleId");
+        return this.mutate(name, String(id), caller, () => this.enrichment.retryAnalysis(id));
+      }
       case "article.chat.list": return this.chat.list(integer(input, "articleId"));
       case "article.chat.ask": {
         const id = integer(input, "articleId");
@@ -170,7 +175,7 @@ export class ApplicationOperations {
     }
   }
 
-  private dashboardSummary(): { total: number; unread: number; saved: number; interested: number; recommended: number; pending: number; failed: number; readingMinutes: number } {
+  private dashboardSummary(): { total: number; unread: number; saved: number; interested: number; recommended: number; pending: number; failed: number; analysisFailed: number; readingMinutes: number } {
     const row = this.database.prepare(`
       SELECT
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') THEN 1 ELSE 0 END) AS total,
@@ -178,8 +183,16 @@ export class ApplicationOperations {
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_saved, 0) = 1 THEN 1 ELSE 0 END) AS saved,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND u.interest = 'interested' THEN 1 ELSE 0 END) AS interested,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND r.target_item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL THEN 1 ELSE 0 END) AS recommended,
-        sum(CASE WHEN i.extraction_status != 'failed' AND NOT EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') THEN 1 ELSE 0 END) AS pending,
+        sum(CASE WHEN i.extraction_status != 'failed'
+          AND NOT EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis')
+          AND EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='analysis' AND j.status IN ('pending','running','retry_wait'))
+          THEN 1 ELSE 0 END) AS pending,
         sum(CASE WHEN i.extraction_status = 'failed' THEN 1 ELSE 0 END) AS failed,
+        sum(CASE WHEN i.extraction_status != 'failed'
+          AND NOT EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis')
+          AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='analysis' AND j.status IN ('pending','running','retry_wait'))
+          AND EXISTS(SELECT 1 FROM jobs j WHERE j.item_id=i.id AND j.type='analysis' AND j.status='failed')
+          THEN 1 ELSE 0 END) AS analysis_failed,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_read, 0) = 0 THEN coalesce(i.estimated_reading_minutes, 5) ELSE 0 END) AS reading_minutes
       FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
       LEFT JOIN item_recommendations r ON r.target_item_id = i.id AND r.model_id = ? AND r.input_version = ?
@@ -194,6 +207,7 @@ export class ApplicationOperations {
       recommended: Number(row?.recommended ?? 0),
       pending: Number(row?.pending ?? 0),
       failed: Number(row?.failed ?? 0),
+      analysisFailed: Number(row?.analysis_failed ?? 0),
       readingMinutes: Number(row?.reading_minutes ?? 0),
     };
   }
@@ -295,8 +309,8 @@ function optionalText(input: Record<string, unknown>, key: string): string | und
 
 function optionalProcessingState(input: Record<string, unknown>, key: string): ProcessingState | undefined {
   if (input[key] === undefined) return undefined;
-  if (input[key] === "ready" || input[key] === "pending" || input[key] === "failed") return input[key];
-  throw new Error(`${key} must be ready, pending, or failed`);
+  if (input[key] === "ready" || input[key] === "pending" || input[key] === "failed" || input[key] === "analysis_failed") return input[key];
+  throw new Error(`${key} must be ready, pending, failed, or analysis_failed`);
 }
 
 function settings(value: unknown): SourceSettings {

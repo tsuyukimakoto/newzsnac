@@ -321,4 +321,66 @@ export const migrations: readonly Migration[] = [
       ALTER TABLE item_analyses DROP COLUMN reasons_json;
     `,
   },
+  {
+    version: 10,
+    name: "stabilize_analysis_jobs",
+    sql: `
+      UPDATE items
+      SET extraction_status = 'failed', updated_at = CURRENT_TIMESTAMP
+      WHERE extraction_status != 'failed'
+        AND nullif(trim(coalesce(extracted_content, feed_content, '')), '') IS NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM item_analyses a
+          WHERE a.item_id = items.id AND a.kind = 'analysis'
+        );
+
+      UPDATE jobs
+      SET status = 'failed', lease_owner = NULL, lease_expires_at = NULL,
+        last_error = 'superseded by analysis pipeline recovery', updated_at = CURRENT_TIMESTAMP
+      WHERE type = 'analysis'
+        AND status IN ('pending', 'running', 'retry_wait')
+        AND (
+          EXISTS (SELECT 1 FROM items i WHERE i.id = jobs.item_id AND i.extraction_status = 'failed')
+          OR id != (
+            SELECT max(candidate.id) FROM jobs candidate
+            WHERE candidate.type = 'analysis' AND candidate.item_id = jobs.item_id
+          )
+        );
+
+      UPDATE jobs
+      SET status = 'pending', attempts = 0, available_at = CURRENT_TIMESTAMP,
+        lease_owner = NULL, lease_expires_at = NULL, last_error = NULL,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id IN (
+        SELECT max(j.id)
+        FROM jobs j
+        JOIN items i ON i.id = j.item_id
+        WHERE j.type = 'analysis'
+          AND i.extraction_status != 'failed'
+          AND nullif(trim(coalesce(i.extracted_content, i.feed_content, '')), '') IS NOT NULL
+          AND NOT EXISTS (
+            SELECT 1 FROM item_analyses a
+            WHERE a.item_id = i.id AND a.kind = 'analysis'
+          )
+        GROUP BY j.item_id
+      );
+
+      INSERT INTO jobs(
+        type, item_id, payload_json, status, priority, attempts, max_attempts,
+        available_at, created_at, updated_at
+      )
+      SELECT 'analysis', i.id, json_object('itemId', i.id), 'pending', 0, 0, 5,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+      FROM items i
+      WHERE i.extraction_status != 'failed'
+        AND nullif(trim(coalesce(i.extracted_content, i.feed_content, '')), '') IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1 FROM item_analyses a
+          WHERE a.item_id = i.id AND a.kind = 'analysis'
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM jobs j WHERE j.item_id = i.id AND j.type = 'analysis'
+        );
+    `,
+  },
 ];

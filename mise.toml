@@ -7,6 +7,52 @@ minimum_release_age = "14d"
 node = "lts"
 "npm:@fission-ai/openspec" = "latest"
 
+[tasks.setup]
+description = "Install project dependencies with the npm version managed by mise"
+run = "npm install"
+
+[tasks.build]
+description = "Compile TypeScript"
+run = "./node_modules/.bin/tsc -p tsconfig.json"
+
+[tasks.start]
+description = "Build and start the web server and both workers"
+depends = ["build"]
+run = "node dist/src/main.js"
+
+[tasks.server]
+description = "Build and start only the web server"
+depends = ["build"]
+run = "node dist/src/server.js"
+
+[tasks."worker:collection"]
+description = "Build and start the collection worker"
+depends = ["build"]
+run = "node dist/src/workers/collection.js"
+
+[tasks."worker:analysis"]
+description = "Build and start the analysis worker"
+depends = ["build"]
+run = "node dist/src/workers/analysis.js"
+
+[tasks.cli]
+description = "Build and run the validated Newzsnac CLI"
+depends = ["build"]
+run = "node dist/src/cli.js"
+
+[tasks.test]
+description = "Build and run all tests"
+depends = ["build"]
+run = "node --test dist/**/*.test.js"
+
+[tasks."spec:init"]
+description = "Initialize OpenSpec and Codex integration"
+run = "openspec init --tools codex ."
+
+[tasks."spec:update"]
+description = "Regenerate OpenSpec tool integration files"
+run = "openspec update ."
+
 [tasks."spec:validate"]
-description = "Validate all OpenSpec specifications and changes"
-run = "openspec validate --all"
+description = "Strictly validate all OpenSpec specifications and changes"
+run = "openspec validate --all --strict"

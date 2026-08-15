@@ -7,7 +7,7 @@ Newzsnac は RSS/Atom、Hacker News、Bluesky、Zenn をローカルの SQLite �
 - RSS/Atomフィード、フィードを公開するWebサイト、Hacker News、Bluesky、Zennを情報源として登録
 - 記事の収集、本文保存、検索、既読管理、保存、関心の記録をSQLiteへ集約
 - 公開日時、要約、見出しと説明から成るKEY POINTSを中心にしたIndexと記事ペイン
-- 分析済み、準備中、取得失敗を分けたIndexと、取得失敗記事の個別再取得
+- 分析済み、準備中、取得失敗、分析失敗を分けたIndexと、失敗記事の個別再試行
 - `j`、`k`を中心としたキーボード操作と、既読記事を隠しながら読み進める連続閲覧
 - 保存済み全文のアプリ内表示と、公開元を新しいタブで開く二つの読み方
 - LM Studioによる日本語要約、ラベル、優先度判定、翻訳
@@ -30,18 +30,17 @@ Newzsnacは、情報を集める処理と読む操作を分離したローカル
 
 ```sh
 mise install
-npm install
-npm run build
-npm start
+mise run setup
+mise run start
 ```
 
-ブラウザーで [http://127.0.0.1:4317](http://127.0.0.1:4317) を開きます。`npm start` は次の三つをまとめて起動します。
+ブラウザーで [http://127.0.0.1:4317](http://127.0.0.1:4317) を開きます。`mise run start` はビルド後、次の三つをまとめて起動します。
 
 - Web 画面と操作 API
 - 10秒ごとに登録済み情報源を確認する収集ワーカー
 - 2秒ごとに分析・翻訳ジョブを確認する分析ワーカー
 
-終了するときは、`npm start` を実行したターミナルで `Ctrl-C` を押します。
+終了するときは、`mise run start` を実行したターミナルで `Ctrl-C` を押します。
 
 ## 最初の情報源を追加する
 
@@ -57,10 +56,12 @@ npm start
 LM Studio が停止している場合も、収集と閲覧は動作します。要約と翻訳を使う場合は LM Studio で Qwen を読み込み、OpenAI互換のローカルサーバーを `http://127.0.0.1:1234/v1` で起動します。初期値の `qwen` を名前に含むモデルが読み込まれている場合は、その実際のモデルIDを自動選択します。別名のモデルを使う場合は、起動前に指定します。
 
 ```sh
-NEWSZNAC_LM_STUDIO_MODEL='実際のモデルID' npm start
+NEWSZNAC_LM_STUDIO_MODEL='実際のモデルID' mise run start
 ```
 
 画面左下に `SQLite · LM Studio (モデルID)` と表示されれば接続済みです。`LM Studio 未接続` の場合、分析ジョブは SQLite に残り、接続後に再試行されます。
+
+記事分析ではモデルの推論出力を無効にし、JSON Schemaに沿った最終回答だけを保存します。長い記事は保存本文を変更せず、分析時だけ冒頭と末尾を残して既定で12,000文字以内に収めます。
 
 ## 気になった記事と「読むべきかも？」
 
@@ -69,7 +70,7 @@ NEWSZNAC_LM_STUDIO_MODEL='実際のモデルID' npm start
 内容が近い未読記事へ「読むべきかも？」を表示するには、LM Studioで埋め込みモデルを読み込み、そのモデルIDを指定して起動します。埋め込みにはOpenAI互換の`/v1/embeddings`を使い、記事本文とベクトルはこの端末の外へ送りません。
 
 ```sh
-NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' npm start
+NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' mise run start
 ```
 
 初回起動後は新しい記事から順に背景でベクトル化します。「気になった」記事と類似度0.86以上の未読記事が「読むべきかも？」へ現れ、根拠になった記事名と類似度を確認できます。記事ごとに閾値だけで判定するため、固定の表示件数や上位件数による打ち切りはありません。埋め込みモデルを停止しても、収集、閲覧、検索、関心フラグの変更は継続します。再起動後に未処理ジョブが再試行されます。
@@ -78,7 +79,7 @@ NEWSZNAC_EMBEDDING_MODEL='LM Studioで読み込んだ埋め込みモデルID' np
 
 ## 記事を読み進める
 
-通常のIndexには本文取得と分析が完了した記事だけが表示されます。分析待ちの記事は左側の「準備中」、本文を取得できなかった記事は「取得失敗」から確認できます。「取得失敗」で記事を選び、「本文を再取得」を押すと元URLへ再度アクセスします。成功した記事は「準備中」へ移り、分析完了後に通常のIndexへ表示されます。
+通常のIndexには本文取得と分析が完了した記事だけが表示されます。分析待ちの記事は左側の「準備中」、本文を取得できなかった記事は「取得失敗」、分析の再試行上限に達した記事は「分析失敗」から確認できます。「取得失敗」で「本文を再取得」を押すと元URLへ再度アクセスします。「分析失敗」で「分析を再試行」を押すと、保存済み本文を使って分析をやり直します。どちらも再試行後は「準備中」へ移り、分析完了後に通常のIndexへ表示されます。
 
 Indexの「既読を隠す」が有効な場合、別の記事へ移ると直前の記事が既読になり、Indexから外れます。設定はブラウザーに保存されます。既読記事も含めて探す場合はチェックを外します。本文をスクロールしただけでは既読になりません。
 
@@ -105,6 +106,7 @@ LM Studioが停止している場合は問答欄にエラーが表示されま�
 NEWSZNAC_DATABASE_PATH=data/newzsnac.sqlite
 NEWSZNAC_LM_STUDIO_URL=http://127.0.0.1:1234/v1
 NEWSZNAC_LM_STUDIO_MODEL=qwen/qwen3.8-27b
+NEWSZNAC_ANALYSIS_MAX_CHARACTERS=12000
 NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
 
@@ -115,6 +117,7 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 | `NEWSZNAC_HOST` | `127.0.0.1` | Web画面の待受先。ループバックのみ |
 | `NEWSZNAC_LM_STUDIO_URL` | `http://127.0.0.1:1234/v1` | LM StudioのOpenAI互換API |
 | `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析、翻訳、記事問答に使うモデルID |
+| `NEWSZNAC_ANALYSIS_MAX_CHARACTERS` | `12000` | 分析時にLM Studioへ渡す記事本文の最大文字数。超過時は冒頭と末尾を保持 |
 | `NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS` | `24000` | 記事問答でLM Studioへ渡す文脈の最大文字数 |
 | `NEWSZNAC_EMBEDDING_MODEL` | 未設定 | 記事ベクトルに使うLM Studioの埋め込みモデルID |
 | `NEWSZNAC_EMBEDDING_MAX_CHARACTERS` | `12000` | 埋め込み入力へ含める最大文字数 |
@@ -126,9 +129,9 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 Web、収集、分析を個別に起動する場合は、次のコマンドを使います。
 
 ```sh
-npm run server
-npm run worker:collection -- --watch
-npm run worker:analysis -- --watch
+mise run server
+mise run worker:collection -- --watch
+mise run worker:analysis -- --watch
 ```
 
 CLIとOpenClawからの操作は [docs/openclaw.md](docs/openclaw.md)、SQLiteのバックアップは [docs/backup.md](docs/backup.md) を参照してください。
@@ -140,25 +143,25 @@ CLIとOpenClawからの操作は [docs/openclaw.md](docs/openclaw.md)、SQLite�
 クローン後にOpenSpecとCodex向けの連携ファイルを用意する場合は、OpenSpec CLIをインストールして初期化します。
 
 ```sh
-npm install -g @fission-ai/openspec@latest
-openspec init --tools codex .
+mise install
+mise run spec:init
 ```
 
 OpenSpec CLIを更新した後は、プロジェクト直下で次を実行すると連携ファイルを再生成できます。
 
 ```sh
-openspec update .
+mise run spec:update
 ```
 
 OpenSpecの設計資料を含む現在の仕様は、次のコマンドで検証できます。
 
 ```sh
-openspec validate --all --strict
+mise run spec:validate
 ```
 
 ## 検証
 
 ```sh
-npm test
-openspec validate --all --strict
+mise run test
+mise run spec:validate
 ```

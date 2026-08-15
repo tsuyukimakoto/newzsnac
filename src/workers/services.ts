@@ -78,7 +78,7 @@ export async function runAnalysisCycle(
   }
   const worker = new EnrichmentWorker(
     database,
-    new LmStudioClient(config.lmStudioUrl, fetcher),
+    new LmStudioClient(config.lmStudioUrl, fetcher, config.analysisMaxCharacters),
     `analysis-${process.pid}`,
     new RecommendationService(database, config),
   );

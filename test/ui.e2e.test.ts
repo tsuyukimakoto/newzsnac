@@ -33,9 +33,19 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   }
   insert.run(31, "https://example.com/31", "Pending article", "2026-08-14T20:00:00.000Z", timestamp, "Pending body", timestamp, timestamp);
   database.prepare(`
+    INSERT INTO jobs(type, item_id, payload_json, status, available_at, created_at, updated_at)
+    VALUES ('analysis', 31, '{}', 'pending', ?, ?, ?)
+  `).run(timestamp, timestamp, timestamp);
+  database.prepare(`
     INSERT INTO items(id, canonical_url, title, published_at, discovered_at,
       extraction_status, created_at, updated_at)
     VALUES (32, 'https://example.com/32', 'Failed article', '2026-08-14T19:00:00.000Z', ?, 'failed', ?, ?)
+  `).run(timestamp, timestamp, timestamp);
+  insert.run(33, "https://example.com/33", "Analysis failed article", "2026-08-14T18:00:00.000Z", timestamp, "Analysis failed body", timestamp, timestamp);
+  database.prepare(`
+    INSERT INTO jobs(type, item_id, payload_json, status, attempts, max_attempts,
+      available_at, last_error, created_at, updated_at)
+    VALUES ('analysis', 33, '{}', 'failed', 5, 5, ?, 'invalid JSON', ?, ?)
   `).run(timestamp, timestamp, timestamp);
   const insertAnalysis = database.prepare(`
     INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
@@ -84,6 +94,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator("#total-count").textContent(), "30");
   assert.equal(await page.locator("#pending-count").textContent(), "1");
   assert.equal(await page.locator("#failed-count").textContent(), "1");
+  assert.equal(await page.locator("#analysis-failed-count").textContent(), "1");
   assert.equal(await page.locator("#runtime-status").textContent(), "SQLite · LM Studio (qwen) · 推薦 1");
   assert.equal(await page.locator(".reader-summary p").textContent(), "First summary");
   assert.deepEqual(await page.locator(".key-point-headline").allTextContents(), ["First point", "Second point"]);
@@ -116,6 +127,22 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator("#stream-title").textContent(), "準備中");
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Failed article");
   assert.equal(await page.locator("#pending-count").textContent(), "2");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("status=analysis_failed")),
+    page.locator("#filter-analysis_failed").click(),
+  ]);
+  assert.equal(await page.locator("#stream-title").textContent(), "分析失敗");
+  assert.deepEqual(await page.locator(".article-card h2").allTextContents(), ["Analysis failed article"]);
+  assert.equal(await page.locator("#retry-article").textContent(), "分析を再試行");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.analysis.retry")),
+    page.waitForResponse((response) => response.url().includes("status=pending")),
+    page.locator("#retry-article").click(),
+  ]);
+  assert.equal(await page.locator("#stream-title").textContent(), "準備中");
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Analysis failed article");
+  assert.equal(await page.locator("#analysis-failed-count").textContent(), "0");
+  assert.equal(await page.locator("#pending-count").textContent(), "3");
   await Promise.all([
     page.waitForResponse((response) => !response.url().includes("status=") && response.url().includes("/api/items")),
     page.locator("#filter-all").click(),

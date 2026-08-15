@@ -41,12 +41,32 @@ test("analysis validates structured output, stores valid results, and orders det
   } finally { database.close(); }
 });
 
-test("LM Studio compatibility omits unsupported schema keys and accepts separated reasoning content", async () => {
+test("analysis disables reasoning and rejects reasoning without final structured content", async () => {
   assert.equal("uniqueItems" in analysisJsonSchema.properties.labels, false);
-  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => Response.json({
-    choices: [{ message: { content: "", reasoning_content: JSON.stringify(valid) } }],
-  }));
-  assert.deepEqual(await client.analyze("qwen", "Title", "Body"), valid);
+  let requestBody: Record<string, unknown> | undefined;
+  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return Response.json({ choices: [{ message: { content: "", reasoning_content: JSON.stringify(valid) } }] });
+  });
+  await assert.rejects(() => client.analyze("qwen", "Title", "Body"), /structured content/);
+  assert.equal(requestBody?.reasoning_effort, "none");
+});
+
+test("analysis deterministically keeps the beginning and end within its character limit", async () => {
+  let prompt = "";
+  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { messages: Array<{ content: string }> };
+    prompt = body.messages[0]!.content;
+    return response(valid);
+  }, 1_000);
+  const article = `${"A".repeat(900)}${"B".repeat(900)}`;
+  await client.analyze("qwen", "Title", article);
+  assert.match(prompt, /A{100}/);
+  assert.match(prompt, /B{100}$/);
+  assert.doesNotMatch(prompt, new RegExp(article));
+  const sentContent = prompt.slice(prompt.indexOf("本文:\n") + "本文:\n".length);
+  assert.equal([...sentContent].length, 1_000);
+  assert.match(sentContent, /本文中略/);
 });
 
 test("analysis asks for explanatory key points", async () => {
