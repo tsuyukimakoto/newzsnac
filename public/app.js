@@ -5,6 +5,7 @@ const state = {
   loading: false, loadGeneration: 0, navigating: false, filter: { type: "all" }, view: "reader", total: null,
   hideRead: storedHideRead !== "false",
   chats: new Map(),
+  backHistory: [], forwardHistory: [],
 };
 if (storedHideRead === null) localStorage.setItem("newzsnac.hideRead", "true");
 const list = document.querySelector("#article-list");
@@ -248,8 +249,66 @@ async function moveFocus(index) {
       current.isRead = true;
       await loadDashboard();
     }
+    pushHistory(state.backHistory, current);
+    state.forwardHistory = [];
     if (state.hideRead) await loadItems(document.querySelector("#search").value.trim(), true, targetId);
     else select(targetIndex);
+  } catch (error) {
+    current.isRead = false;
+    document.querySelector("#stream-error").textContent = `既読状態を更新できませんでした: ${error.message}`;
+    renderList();
+  } finally {
+    state.navigating = false;
+  }
+}
+
+function pushHistory(history, item) {
+  if (history.at(-1)?.id !== item.id) history.push(item);
+}
+
+function showHistoryItem(item) {
+  let index = state.items.findIndex((candidate) => candidate.id === item.id);
+  if (index < 0) {
+    state.items = [item, ...state.items];
+    index = 0;
+  }
+  select(index);
+}
+
+function moveBackward() {
+  if (state.navigating || state.items.length === 0) return;
+  const current = state.items[state.selected];
+  let target = state.backHistory.pop();
+  if (!target && state.selected > 0) target = state.items[state.selected - 1];
+  if (!current || !target || target.id === current.id) return;
+  pushHistory(state.forwardHistory, current);
+  showHistoryItem(target);
+}
+
+async function moveForward() {
+  if (state.navigating || state.items.length === 0) return;
+  const target = state.forwardHistory.at(-1);
+  if (!target) {
+    await moveFocus(state.selected + 1);
+    return;
+  }
+  const current = state.items[state.selected];
+  if (!current || target.id === current.id) return;
+  state.navigating = true;
+  document.querySelector("#stream-error").textContent = "";
+  try {
+    if (!current.isRead) {
+      await executeOperation("article.read", { articleId: current.id, read: true });
+      current.isRead = true;
+      await loadDashboard();
+    }
+    state.forwardHistory.pop();
+    pushHistory(state.backHistory, current);
+    if (state.hideRead && !target.isRead) {
+      await loadItems(document.querySelector("#search").value.trim(), true, target.id);
+    } else {
+      showHistoryItem(target);
+    }
   } catch (error) {
     current.isRead = false;
     document.querySelector("#stream-error").textContent = `既読状態を更新できませんでした: ${error.message}`;
@@ -275,6 +334,10 @@ async function executeOperation(operation, input) {
 }
 
 async function loadItems(query = "", preservePosition = false, preferredId = null) {
+  if (!preservePosition && preferredId === null) {
+    state.backHistory = [];
+    state.forwardHistory = [];
+  }
   const generation = ++state.loadGeneration;
   state.loading = true;
   try {
@@ -288,9 +351,21 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
     const response = await fetch(url);
     const data = await response.json();
     if (generation !== state.loadGeneration) return;
-    const selectedId = preferredId ?? (preservePosition ? state.items[state.selected]?.id : null);
+    const selectedItem = preservePosition ? state.items[state.selected] : null;
+    const selectedId = preferredId ?? selectedItem?.id ?? null;
     const scrollTop = list.scrollTop;
-    state.items = data.items || [];
+    const refreshedItems = data.items || [];
+    if (preservePosition && state.hideRead) {
+      const historyIds = new Set([
+        ...state.forwardHistory.map((item) => item.id),
+        ...(selectedItem && preferredId === null ? [selectedItem.id] : []),
+      ]);
+      const refreshedIds = new Set(refreshedItems.map((item) => item.id));
+      const visibleHistory = state.items.filter((item) => item.isRead && historyIds.has(item.id) && !refreshedIds.has(item.id));
+      state.items = [...visibleHistory, ...refreshedItems];
+    } else {
+      state.items = refreshedItems;
+    }
     const selectedIndex = selectedId ? state.items.findIndex((item) => item.id === selectedId) : -1;
     state.selected = selectedIndex >= 0 ? selectedIndex : 0;
     list.scrollTop = preservePosition ? scrollTop : 0;
@@ -406,9 +481,9 @@ document.addEventListener("keydown", (event) => {
   if (isTextEntryKey(event)) return;
   const item = state.items[state.selected];
   if (event.key === "j") {
-    event.preventDefault(); void moveFocus(state.selected + 1);
+    event.preventDefault(); void moveForward();
   } else if (event.key === "k") {
-    event.preventDefault(); void moveFocus(state.selected - 1);
+    event.preventDefault(); moveBackward();
   } else if (event.code === "Space") {
     event.preventDefault(); setMode(state.mode === "deep" ? "fast" : "deep"); renderReader();
   } else if (event.key === "/") {

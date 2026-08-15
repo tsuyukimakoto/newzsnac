@@ -105,6 +105,26 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator(".article-card h2", { hasText: "First" }).count(), 0);
   assert.equal(await page.locator("#visible-count").textContent(), "29件を表示");
   assert.equal(await page.evaluate(() => localStorage.getItem("newzsnac.hideRead")), "true");
+  await page.locator("#article-list").focus();
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.read")),
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
+    page.keyboard.press("j"),
+  ]);
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Article 3");
+  await page.keyboard.press("k");
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  assert.equal(database.prepare("SELECT is_read FROM item_user_states WHERE item_id=3").get()?.is_read ?? 0, 0);
+  await page.keyboard.press("k");
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "First");
+  assert.equal(database.prepare("SELECT is_read FROM item_user_states WHERE item_id=3").get()?.is_read ?? 0, 0);
+  await page.keyboard.press("j");
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.read")),
+    page.keyboard.press("u"),
+  ]);
+  assert.equal(database.prepare("SELECT is_read FROM item_user_states WHERE item_id=2").get()?.is_read, 0);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/items")),
     page.locator("#hide-read").uncheck(),
