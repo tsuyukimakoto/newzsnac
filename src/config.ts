@@ -27,7 +27,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   embeddingMaxCharacters: 12_000,
   embeddingInputVersion: "embedding-v1",
   recommendationSimilarityThreshold: 0.86,
-  analysisPromptVersion: "analysis-v1",
+  analysisPromptVersion: "analysis-v2",
   translationPromptVersion: "translate-v1",
   chatContextMaxCharacters: 24_000,
   bindHost: "127.0.0.1" as const,

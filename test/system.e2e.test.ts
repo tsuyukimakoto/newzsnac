@@ -56,7 +56,7 @@ test("four sources flow through collection, normalization, analysis, reading, de
   const enrichment = new EnrichmentService(database);
   const itemRows = database.prepare("SELECT id FROM items ORDER BY id").all();
   for (const row of itemRows) enrichment.enqueueAnalysis(Number(row.id), 50, null, clock());
-  const lm = new LmStudioClient(loadConfig({}).lmStudioUrl, async () => Response.json({ choices: [{ message: { content: JSON.stringify({ summaryJa: "要約", labels: ["news"], priority: 70, reasons: ["new"], itemType: "article", originalLanguage: "en" }) } }] }));
+  const lm = new LmStudioClient(loadConfig({}).lmStudioUrl, async () => Response.json({ choices: [{ message: { content: JSON.stringify({ summaryJa: "要約", labels: ["news"], priority: 70, keyPoints: [{ headline: "新着", detail: "記事の新しい内容を説明する。" }], itemType: "article", originalLanguage: "en" }) } }] }));
   const worker = new EnrichmentWorker(database, lm, "system-test");
   for (let index = 0; index < 4; index += 1) assert.equal(await worker.runOne("qwen", "v1", clock()), true);
   assert.equal(database.prepare("SELECT count(*) count FROM item_analyses").get()?.count, 4);

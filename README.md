@@ -6,7 +6,7 @@ Newzsnac は RSS/Atom、Hacker News、Bluesky、Zenn をローカルの SQLite �
 
 - RSS/Atomフィード、フィードを公開するWebサイト、Hacker News、Bluesky、Zennを情報源として登録
 - 記事の収集、本文保存、検索、既読管理、保存、関心の記録をSQLiteへ集約
-- 公開日時、要約、ポイントを中心にしたIndexと記事ペイン
+- 公開日時、要約、見出しと説明から成るKEY POINTSを中心にしたIndexと記事ペイン
 - `j`、`k`を中心としたキーボード操作と、既読記事を隠しながら読み進める連続閲覧
 - 保存済み全文のアプリ内表示と、公開元を新しいタブで開く二つの読み方
 - LM Studioによる日本語要約、ラベル、優先度判定、翻訳
@@ -117,7 +117,7 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 | `NEWSZNAC_EMBEDDING_MAX_CHARACTERS` | `12000` | 埋め込み入力へ含める最大文字数 |
 | `NEWSZNAC_EMBEDDING_INPUT_VERSION` | `embedding-v1` | 埋め込み入力形式の版。変更すると再生成 |
 | `NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD` | `0.86` | 「読むべきかも？」に表示する最低類似度 |
-| `NEWSZNAC_ANALYSIS_PROMPT_VERSION` | `analysis-v1` | 分析結果のプロンプト版 |
+| `NEWSZNAC_ANALYSIS_PROMPT_VERSION` | `analysis-v2` | 分析結果のプロンプト版 |
 | `NEWSZNAC_TRANSLATION_PROMPT_VERSION` | `translate-v1` | 翻訳結果のプロンプト版 |
 
 Web、収集、分析を個別に起動する場合は、次のコマンドを使います。

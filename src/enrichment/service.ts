@@ -76,14 +76,14 @@ export class EnrichmentWorker {
         const result = await this.client.analyze(modelId, String(item.title), String(item.content));
         this.database.prepare(`
           INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
-            labels_json, priority, reasons_json, item_type, original_language, analyzed_at)
+            labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
           VALUES (?, 'analysis', ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(item_id, kind, model_id, prompt_version) DO UPDATE SET
             summary_ja=excluded.summary_ja, labels_json=excluded.labels_json, priority=excluded.priority,
-            reasons_json=excluded.reasons_json, item_type=excluded.item_type,
+            key_points_json=excluded.key_points_json, item_type=excluded.item_type,
             original_language=excluded.original_language, analyzed_at=excluded.analyzed_at
         `).run(job.itemId, modelId, promptVersion, result.summaryJa, JSON.stringify(result.labels), result.priority,
-          JSON.stringify(result.reasons), result.itemType, result.originalLanguage, now.toISOString());
+          JSON.stringify(result.keyPoints), result.itemType, result.originalLanguage, now.toISOString());
         this.recommendations?.ensureEmbeddingQueued(job.itemId!);
       } else if (job.type === "translation") {
         const payload = job.payload as { modelId?: string; promptVersion?: string };

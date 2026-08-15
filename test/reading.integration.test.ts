@@ -71,21 +71,24 @@ test("search, smart views, and time budgets work without LM Studio or external n
   } finally { database.close(); }
 });
 
-test("article list exposes publication time and analysis points", () => {
+test("article list exposes publication time and structured key points", () => {
   const database = openDatabase(":memory:");
   try {
     const publishedAt = "2026-08-14T22:00:00Z";
     insertItem(database, 1, publishedAt, 4);
     database.prepare(`
       INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
-        labels_json, priority, reasons_json, item_type, original_language, analyzed_at)
+        labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
       VALUES (1, 'analysis', 'qwen', 'v1', '短い要約', '["AI","研究"]', 80,
-        '["新しい研究結果","実務への影響"]', 'article', 'ja', ?)
+        '[{"headline":"新しい研究結果","detail":"従来手法より精度が向上した。"},{"headline":"実務への影響","detail":""}]', 'article', 'ja', ?)
     `).run(publishedAt);
     const article = new ReadingService(database).list()[0];
     assert.equal(article?.publishedAt, publishedAt);
     assert.equal(article?.summary, "短い要約");
     assert.deepEqual(article?.labels, ["AI", "研究"]);
-    assert.deepEqual(article?.reasons, ["新しい研究結果", "実務への影響"]);
+    assert.deepEqual(article?.keyPoints, [
+      { headline: "新しい研究結果", detail: "従来手法より精度が向上した。" },
+      { headline: "実務への影響", detail: "" },
+    ]);
   } finally { database.close(); }
 });

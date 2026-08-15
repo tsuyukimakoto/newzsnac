@@ -22,7 +22,10 @@ export class LmStudioClient {
         temperature: 0,
         max_tokens: 1_200,
         stream: false,
-        messages: [{ role: "user", content: `次の記事を日本語で分析してください。\nタイトル: ${title}\n本文:\n${content}` }],
+        messages: [{
+          role: "user",
+          content: `次の記事を日本語で分析してください。KEY POINTSは最大3件とし、headlineには論点を短く、detailには記事が述べている主張、根拠または影響を1〜3文で記述してください。記事本文にない推測は加えないでください。\nタイトル: ${title}\n本文:\n${content}`,
+        }],
         response_format: { type: "json_schema", json_schema: { name: "article_analysis", strict: true, schema: analysisJsonSchema } },
       }),
     });

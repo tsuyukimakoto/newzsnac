@@ -18,7 +18,7 @@ test("migrations, WAL, FTS, concurrent connections, leases, and backup restore",
   context.after(() => second.close());
 
   assert.equal(first.prepare("PRAGMA journal_mode").get()?.journal_mode, "wal");
-  assert.equal(first.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 8);
+  assert.equal(first.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 9);
 
   const now = "2026-08-15T00:00:00.000Z";
   const sourceId = Number(first.prepare(`

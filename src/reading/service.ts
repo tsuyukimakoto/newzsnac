@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import type { KeyPoint } from "../enrichment/schema.js";
 
 export type SortOrder = "newest" | "recommended" | "source" | "oldest";
 export type Interest = "interested" | "not_interested" | null;
@@ -17,7 +18,7 @@ export interface ArticleListItem {
   readonly content: string | null;
   readonly summary: string | null;
   readonly labels: readonly string[];
-  readonly reasons: readonly string[];
+  readonly keyPoints: readonly KeyPoint[];
   readonly source: string | null;
   readonly extractionStatus: string;
   readonly translationStatus: "ready" | "pending" | null;
@@ -39,7 +40,7 @@ interface ArticleRow {
   content: string | null;
   summary: string | null;
   labels_json: string | null;
-  reasons_json: string | null;
+  key_points_json: string;
   source: string | null;
   extraction_status: string;
   translation_status: "ready" | "pending" | null;
@@ -60,6 +61,18 @@ function stringArray(value: string | null): readonly string[] {
   }
 }
 
+function keyPointArray(value: string): readonly KeyPoint[] {
+  const parsed = JSON.parse(value) as unknown;
+  if (!Array.isArray(parsed) || parsed.some((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return true;
+    const point = entry as Record<string, unknown>;
+    return Object.keys(point).length !== 2 ||
+      typeof point.headline !== "string" || !point.headline.trim() ||
+      typeof point.detail !== "string";
+  })) throw new Error("Stored key points are invalid");
+  return parsed as KeyPoint[];
+}
+
 function mapArticle(row: ArticleRow): ArticleListItem {
   return {
     id: row.id, title: row.title, canonicalUrl: row.canonical_url,
@@ -69,7 +82,7 @@ function mapArticle(row: ArticleRow): ArticleListItem {
     content: row.content,
     summary: row.summary,
     labels: stringArray(row.labels_json),
-    reasons: stringArray(row.reasons_json),
+    keyPoints: keyPointArray(row.key_points_json),
     source: row.source,
     extractionStatus: row.extraction_status,
     translationStatus: row.translation_status,
@@ -116,7 +129,7 @@ export class ReadingService {
         max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
-        max(a.reasons_json) AS reasons_json, min(s.display_name) AS source,
+        coalesce(max(a.key_points_json), '[]') AS key_points_json, min(s.display_name) AS source,
         i.extraction_status,
         CASE
           WHEN EXISTS(SELECT 1 FROM item_analyses t WHERE t.item_id=i.id AND t.kind='translation') THEN 'ready'
@@ -161,7 +174,7 @@ export class ReadingService {
         max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
-        max(a.reasons_json) AS reasons_json, min(s.display_name) AS source,
+        coalesce(max(a.key_points_json), '[]') AS key_points_json, min(s.display_name) AS source,
         i.extraction_status,
         CASE
           WHEN EXISTS(SELECT 1 FROM item_analyses t WHERE t.item_id=i.id AND t.kind='translation') THEN 'ready'

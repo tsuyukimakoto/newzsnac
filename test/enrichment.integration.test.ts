@@ -19,7 +19,8 @@ function response(content: unknown): Response {
 
 const valid = {
   summaryJa: "ローカルAIの記事", labels: ["AI"], priority: 82,
-  reasons: ["関心分野"], itemType: "article", originalLanguage: "en",
+  keyPoints: [{ headline: "ローカル処理", detail: "記事本文を端末内のモデルだけで分析する。" }],
+  itemType: "article", originalLanguage: "en",
 };
 
 test("analysis validates structured output, stores valid results, and orders deterministically", async () => {
@@ -33,9 +34,10 @@ test("analysis validates structured output, stores valid results, and orders det
     const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => response(valid));
     const worker = new EnrichmentWorker(database, client, "worker-a");
     assert.equal(await worker.runOne("qwen", "v1", new Date("2026-08-15T00:00:00Z")), true);
-    const stored = database.prepare("SELECT summary_ja, priority FROM item_analyses WHERE item_id = ?").get(itemId);
+    const stored = database.prepare("SELECT summary_ja, priority, key_points_json FROM item_analyses WHERE item_id = ?").get(itemId);
     assert.equal(stored?.summary_ja, "ローカルAIの記事");
     assert.equal(stored?.priority, 82);
+    assert.equal(stored?.key_points_json, JSON.stringify(valid.keyPoints));
   } finally { database.close(); }
 });
 
@@ -45,6 +47,17 @@ test("LM Studio compatibility omits unsupported schema keys and accepts separate
     choices: [{ message: { content: "", reasoning_content: JSON.stringify(valid) } }],
   }));
   assert.deepEqual(await client.analyze("qwen", "Title", "Body"), valid);
+});
+
+test("analysis asks for explanatory key points", async () => {
+  let requestBody: { messages?: Array<{ content?: string }> } | undefined;
+  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as typeof requestBody;
+    return response(valid);
+  });
+  await client.analyze("qwen", "Title", "Body");
+  assert.match(requestBody?.messages?.[0]?.content ?? "", /主張、根拠または影響/);
+  assert.match(requestBody?.messages?.[0]?.content ?? "", /1〜3文/);
 });
 
 test("LM Studio HTTP failures include the response detail", async () => {
@@ -88,9 +101,11 @@ test("LM Studio chat reports when reasoning exhausts the output limit", async ()
 test("invalid JSON, out-of-range values, and connection failure stay retryable and are not saved", async () => {
   assert.throws(() => validateAnalysis({ ...valid, priority: 101 }), /outside/);
   assert.throws(() => validateAnalysis({ ...valid, labels: ["1", "2", "3", "4", "5", "6"] }), /labels/);
+  assert.throws(() => validateAnalysis({ ...valid, keyPoints: [{ headline: "見出し", detail: "" }] }), /keyPoints/);
   for (const fetcher of [
     async () => response("not-json"),
     async () => response({ ...valid, priority: 101 }),
+    async () => response({ ...valid, keyPoints: [{ headline: "見出し", detail: "" }] }),
     async () => { throw new Error("connection refused"); },
   ] as const) {
     const database = openDatabase(":memory:");

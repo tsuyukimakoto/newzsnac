@@ -33,10 +33,11 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   }
   const insertAnalysis = database.prepare(`
     INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
-      labels_json, priority, reasons_json, item_type, original_language, analyzed_at)
+      labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
     VALUES (?, 'analysis', 'qwen', 'v1', ?, ?, 80, ?, 'article', 'en', ?)
   `);
-  insertAnalysis.run(1, "First summary", '["AI","Research"]', '["First point","Second point"]', timestamp);
+  insertAnalysis.run(1, "First summary", '["AI","Research"]',
+    '[{"headline":"First point","detail":"First detail explains the article."},{"headline":"Second point","detail":""}]', timestamp);
   database.prepare(`
     INSERT INTO item_recommendations(target_item_id, source_item_id, score, model_id, input_version, calculated_at)
     VALUES (2, 1, 0.91, 'embed-model', 'embedding-v1', ?)
@@ -71,7 +72,8 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator("#total-count").textContent(), "30");
   assert.equal(await page.locator("#runtime-status").textContent(), "SQLite · LM Studio (qwen) · 推薦 1");
   assert.equal(await page.locator(".reader-summary p").textContent(), "First summary");
-  assert.deepEqual(await page.locator(".reader-points li").allTextContents(), ["First point", "Second point"]);
+  assert.deepEqual(await page.locator(".key-point-headline").allTextContents(), ["First point", "Second point"]);
+  assert.deepEqual(await page.locator(".key-point-detail").allTextContents(), ["First detail explains the article."]);
   assert.equal(await page.locator(".article-body").count(), 0);
   assert.equal(await page.locator("#hide-read").isChecked(), true);
   assert.equal(await page.locator("#original-link").getAttribute("target"), "_blank");
@@ -178,7 +180,8 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   await page.keyboard.type("j");
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
   assert.equal(await page.locator(".analysis-pending h2").textContent(), "要約を準備しています");
-  insertAnalysis.run(2, "Second summary", '["Business"]', '["Updated point"]', timestamp);
+  insertAnalysis.run(2, "Second summary", '["Business"]',
+    '[{"headline":"Updated point","detail":"Updated detail explains the claim."}]', timestamp);
   await page.locator("#search").fill("Second");
   await Promise.all([
     page.waitForResponse((response) => response.url().includes("/api/items?q=Second")),
@@ -186,7 +189,8 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
   assert.equal(await page.locator(".reader-summary p").textContent(), "Second summary");
-  assert.equal(await page.locator(".reader-points li").textContent(), "Updated point");
+  assert.equal(await page.locator(".key-point-headline").textContent(), "Updated point");
+  assert.equal(await page.locator(".key-point-detail").textContent(), "Updated detail explains the claim.");
   await page.locator("#article-list").focus();
   await page.keyboard.press("Space");
   assert.equal(await page.locator("#mode").textContent(), "精読モード");

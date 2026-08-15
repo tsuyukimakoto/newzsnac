@@ -26,7 +26,7 @@ test("runtime workers collect into SQLite, enqueue analysis, and persist LM resu
       if (url.endsWith("/chat/completions")) {
         return Response.json({ choices: [{ message: { content: JSON.stringify({
           summaryJa: "実際の要約", labels: ["local"], priority: 75,
-          reasons: ["new"], itemType: "article", originalLanguage: "en",
+          keyPoints: [{ headline: "New", detail: "新しい内容を説明する。" }], itemType: "article", originalLanguage: "en",
         }) } }] });
       }
       throw new Error(`unexpected request: ${url}`);
@@ -90,7 +90,9 @@ test("collection, local embeddings, explicit interest, recommendation, and remov
       if (url.startsWith("https://example.com/ai-")) return new Response(`<article>${url} local AI details</article>`);
       if (url.endsWith("/models")) return Response.json({ data: [{ id: "qwen" }, { id: "embed-model" }] });
       if (url.endsWith("/chat/completions")) return Response.json({ choices: [{ message: { content: JSON.stringify({
-        summaryJa: "ローカルAIの記事", labels: ["AI"], priority: 80, reasons: ["関心に近い"], itemType: "article", originalLanguage: "en",
+        summaryJa: "ローカルAIの記事", labels: ["AI"], priority: 80,
+        keyPoints: [{ headline: "関心に近い", detail: "関心記事と共通する内容を説明する。" }],
+        itemType: "article", originalLanguage: "en",
       }) } }] });
       if (url.endsWith("/embeddings")) {
         const body = JSON.parse(String(init?.body)) as { input: string };

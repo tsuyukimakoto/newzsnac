@@ -91,9 +91,9 @@ function renderReader() {
   } else {
     contentClass = "reader-content fast-reading";
     const labels = (item.labels || []).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
-    const reasons = (item.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
+    const keyPoints = (item.keyPoints || []).map((point) => `<li><div><strong class="key-point-headline">${escapeHtml(point.headline)}</strong>${point.detail ? `<p class="key-point-detail">${escapeHtml(point.detail)}</p>` : ""}</div></li>`).join("");
     const analysis = item.summary
-      ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${reasons ? `<ol>${reasons}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
+      ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${keyPoints ? `<ol>${keyPoints}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
       : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
     articleMarkup = `${heading}${analysis}<div class="status-line">${statusLabel(item) || "分析済み"}</div>`;
   }

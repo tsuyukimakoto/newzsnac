@@ -304,4 +304,21 @@ export const migrations: readonly Migration[] = [
         ON article_chat_messages(item_id, id);
     `,
   },
+  {
+    version: 9,
+    name: "structured_key_points",
+    sql: `
+      ALTER TABLE item_analyses ADD COLUMN key_points_json TEXT NOT NULL DEFAULT '[]'
+        CHECK (json_valid(key_points_json));
+
+      UPDATE item_analyses
+      SET key_points_json = (
+        SELECT json_group_array(json_object('headline', value, 'detail', ''))
+        FROM json_each(item_analyses.reasons_json)
+      )
+      WHERE kind = 'analysis' AND reasons_json IS NOT NULL;
+
+      ALTER TABLE item_analyses DROP COLUMN reasons_json;
+    `,
+  },
 ];
