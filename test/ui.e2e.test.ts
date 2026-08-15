@@ -115,6 +115,24 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   await chatQuestion.fill("日本語入力中 j k / s i u t o");
   await chatQuestion.press("Escape");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "chat-question");
+  await chatQuestion.evaluate((element) => { element.dataset.testIdentity = "stable-chat-editor"; });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
+    page.locator("#hide-read").evaluate((element) => {
+      (element as HTMLInputElement).checked = true;
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }),
+  ]);
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "chat-question");
+  assert.equal(await page.locator("#chat-question").getAttribute("data-test-identity"), "stable-chat-editor");
+  assert.equal(await page.locator("#chat-question").inputValue(), "日本語入力中 j k / s i u t o");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/items")),
+    page.locator("#hide-read").evaluate((element) => {
+      (element as HTMLInputElement).checked = false;
+      element.dispatchEvent(new Event("change", { bubbles: true }));
+    }),
+  ]);
   const titleBeforeComposition = await page.locator(".reader-content h1").textContent();
   await page.evaluate(() => document.dispatchEvent(new KeyboardEvent("keydown", {
     key: "j", code: "KeyJ", bubbles: true, isComposing: true,

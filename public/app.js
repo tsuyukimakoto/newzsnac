@@ -82,17 +82,30 @@ function renderReader() {
     <a id="original-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">元の記事を開く ↗ <kbd>o</kbd></a>
   </div>`;
   const heading = `<div class="kicker">${escapeHtml(item.source || "ARTICLE")} · <time datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(published)}</time></div><h1>${escapeHtml(item.title)}</h1><div class="byline">${escapeHtml(item.author || "著者不明")}　／　公開 ${escapeHtml(published)}</div>${actions}${recommendation}`;
+  let contentClass;
+  let articleMarkup;
   if (state.mode === "deep") {
-    reader.innerHTML = `<div class="reader-content deep-reading">${heading}${item.summary ? `<div class="summary compact">${escapeHtml(item.summary)}</div>` : ""}<div class="body article-body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div>${chatShell(item)}</div>`;
-    bindReaderActions(item);
-    return;
+    contentClass = "reader-content deep-reading";
+    articleMarkup = `${heading}${item.summary ? `<div class="summary compact">${escapeHtml(item.summary)}</div>` : ""}<div class="body article-body">${escapeHtml(item.content || "保存済み本文はありません。").replace(/\n/g, "<br>")}</div><div class="status-line">${statusLabel(item) || "ローカルに保存済み"}</div>`;
+  } else {
+    contentClass = "reader-content fast-reading";
+    const labels = (item.labels || []).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
+    const reasons = (item.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
+    const analysis = item.summary
+      ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${reasons ? `<ol>${reasons}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
+      : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
+    articleMarkup = `${heading}${analysis}<div class="status-line">${statusLabel(item) || "分析済み"}</div>`;
   }
-  const labels = (item.labels || []).map((label) => `<span>${escapeHtml(label)}</span>`).join("");
-  const reasons = (item.reasons || []).map((reason) => `<li>${escapeHtml(reason)}</li>`).join("");
-  const analysis = item.summary
-    ? `<section class="reader-summary"><div class="section-label">SUMMARY</div><p>${escapeHtml(item.summary)}</p></section><section class="reader-points"><div class="section-label">KEY POINTS</div>${reasons ? `<ol>${reasons}</ol>` : "<p>判断ポイントはありません。</p>"}</section>${labels ? `<div class="reader-labels">${labels}</div>` : ""}`
-    : `<section class="analysis-pending"><span class="pending-mark">◌</span><div><div class="section-label">ANALYSIS</div><h2>要約を準備しています</h2><p>分析が完了すると、ここに要約とポイントを表示します。全文は <kbd>Space</kbd> で確認できます。</p></div></section>`;
-  reader.innerHTML = `<div class="reader-content fast-reading">${heading}${analysis}<div class="status-line">${statusLabel(item) || "分析済み"}</div>${chatShell(item)}</div>`;
+
+  const existingChat = reader.querySelector(`#article-chat[data-article-id="${item.id}"]`);
+  const existingContent = existingChat?.closest(".reader-content");
+  const existingArticle = existingContent?.querySelector(".article-detail");
+  if (existingContent && existingArticle) {
+    existingContent.className = contentClass;
+    existingArticle.innerHTML = articleMarkup;
+  } else {
+    reader.innerHTML = `<div class="${contentClass}"><div class="article-detail">${articleMarkup}</div>${chatShell(item)}</div>`;
+  }
   bindReaderActions(item);
 }
 
@@ -117,45 +130,63 @@ function renderChat(item) {
   const node = reader.querySelector(`#article-chat[data-article-id="${item.id}"]`);
   if (!node) return;
   const chat = articleChat(item.id);
+  if (node.dataset.initialized !== "true") {
+    node.dataset.initialized = "true";
+    node.innerHTML = `<div class="chat-head"><div><div class="section-label">LOCAL Q&amp;A</div><h2>この記事について聞く</h2></div><div class="chat-privacy">記事と問答は、このMacのLM Studioだけに送られます。</div></div>
+      <div class="chat-messages"></div>
+      <form class="chat-form"><textarea id="chat-question" maxlength="4000" required placeholder="この記事の前提、影響、見落としを質問する"></textarea><div class="chat-form-footer"><span class="chat-hint">回答は記事と保存済み問答を参照します</span><button type="submit">ローカルAIに聞く</button></div></form>
+      <p class="chat-error" role="alert" hidden></p>
+      <div class="chat-tools"><span class="chat-hint">別のAIへは自動送信しません</span><button id="handoff-button" type="button">別のAI Chatへの引き継ぎ文</button></div>
+      <div class="handoff-container"></div>`;
+
+    const question = node.querySelector("#chat-question");
+    question.addEventListener("input", () => { chat.draft = question.value; });
+    node.querySelector(".chat-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const value = chat.draft.trim();
+      if (!value || chat.loading) return;
+      chat.loading = true; chat.error = ""; chat.copyStatus = "";
+      renderChat(item);
+      try {
+        const result = await executeOperation("article.chat.ask", { articleId: item.id, question: value });
+        chat.messages = result.messages || [];
+        chat.loaded = true; chat.draft = ""; chat.handoff = "";
+      } catch (error) {
+        chat.error = error.message;
+      } finally {
+        chat.loading = false;
+        renderChat(item);
+      }
+    });
+    node.querySelector("#handoff-button").onclick = async () => {
+      chat.error = ""; chat.copyStatus = "";
+      try {
+        const result = await executeOperation("article.chat.handoff", { articleId: item.id });
+        chat.handoff = result.text;
+      } catch (error) { chat.error = error.message; }
+      renderChat(item);
+    };
+  }
+
   const messages = chat.messages.map((message) => `<div class="chat-message ${message.role}">
     <div class="chat-role">${message.role === "user" ? "YOU" : "LOCAL AI"}</div>
     <div class="chat-body"><span class="chat-content">${formatChatText(message.content)}</span>${message.modelId ? `<small class="chat-model">${escapeHtml(message.modelId)}</small>` : ""}</div>
   </div>`).join("");
   const conversation = messages || `<div class="chat-empty">記事だけでは腑に落ちない点を、手元のLM Studioに質問できます。</div>`;
-  node.innerHTML = `<div class="chat-head"><div><div class="section-label">LOCAL Q&amp;A</div><h2>この記事について聞く</h2></div><div class="chat-privacy">記事と問答は、このMacのLM Studioだけに送られます。</div></div>
-    <div class="chat-messages">${chat.loaded ? conversation : '<div class="chat-empty">履歴を読み込んでいます…</div>'}</div>
-    <form class="chat-form"><textarea id="chat-question" maxlength="4000" required placeholder="この記事の前提、影響、見落としを質問する">${escapeHtml(chat.draft)}</textarea><div class="chat-form-footer"><span class="chat-hint">回答は記事と保存済み問答を参照します</span><button type="submit" ${chat.loading ? "disabled" : ""}>${chat.loading ? "考えています…" : "ローカルAIに聞く"}</button></div></form>
-    ${chat.error ? `<p class="chat-error" role="alert">${escapeHtml(chat.error)}</p>` : ""}
-    <div class="chat-tools"><span class="chat-hint">別のAIへは自動送信しません</span><button id="handoff-button" type="button" ${chat.loading ? "disabled" : ""}>別のAI Chatへの引き継ぎ文</button></div>
-    ${chat.handoff ? `<div class="handoff-panel"><label for="handoff-text">内容を確認してからコピーしてください</label><textarea id="handoff-text">${escapeHtml(chat.handoff)}</textarea><div class="chat-tools"><span class="copy-status">${escapeHtml(chat.copyStatus)}</span><button id="copy-handoff" type="button">コピー</button></div></div>` : ""}`;
-
   const question = node.querySelector("#chat-question");
-  question.addEventListener("input", () => { chat.draft = question.value; });
-  node.querySelector(".chat-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const value = chat.draft.trim();
-    if (!value || chat.loading) return;
-    chat.loading = true; chat.error = ""; chat.copyStatus = "";
-    renderChat(item);
-    try {
-      const result = await executeOperation("article.chat.ask", { articleId: item.id, question: value });
-      chat.messages = result.messages || [];
-      chat.loaded = true; chat.draft = ""; chat.handoff = "";
-    } catch (error) {
-      chat.error = error.message;
-    } finally {
-      chat.loading = false;
-      renderChat(item);
-    }
-  });
-  node.querySelector("#handoff-button").onclick = async () => {
-    chat.error = ""; chat.copyStatus = "";
-    try {
-      const result = await executeOperation("article.chat.handoff", { articleId: item.id });
-      chat.handoff = result.text;
-    } catch (error) { chat.error = error.message; }
-    renderChat(item);
-  };
+  if (document.activeElement !== question && question.value !== chat.draft) question.value = chat.draft;
+  node.querySelector(".chat-messages").innerHTML = chat.loaded
+    ? conversation : '<div class="chat-empty">履歴を読み込んでいます…</div>';
+  const submitButton = node.querySelector('.chat-form button[type="submit"]');
+  submitButton.disabled = chat.loading;
+  submitButton.textContent = chat.loading ? "考えています…" : "ローカルAIに聞く";
+  const errorNode = node.querySelector(".chat-error");
+  errorNode.textContent = chat.error;
+  errorNode.hidden = !chat.error;
+  node.querySelector("#handoff-button").disabled = chat.loading;
+  const handoffContainer = node.querySelector(".handoff-container");
+  handoffContainer.innerHTML = chat.handoff
+    ? `<div class="handoff-panel"><label for="handoff-text">内容を確認してからコピーしてください</label><textarea id="handoff-text">${escapeHtml(chat.handoff)}</textarea><div class="chat-tools"><span class="copy-status">${escapeHtml(chat.copyStatus)}</span><button id="copy-handoff" type="button">コピー</button></div></div>` : "";
   const copyButton = node.querySelector("#copy-handoff");
   if (copyButton) copyButton.onclick = async () => {
     const text = node.querySelector("#handoff-text").value;
