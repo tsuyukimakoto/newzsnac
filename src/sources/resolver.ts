@@ -68,7 +68,7 @@ export class SourceResolver {
     if (!response.ok) throw new Error(`Source returned HTTP ${response.status}`);
     const body = await response.text();
     const contentType = response.headers.get("content-type") ?? "";
-    if (/xml|rss|atom/i.test(contentType) || /^\s*<(?:\?xml|rss|feed)/i.test(body)) {
+    if (/xml|rss|atom/i.test(contentType) || /^\s*<(?:\?xml|rss|feed|rdf:RDF)/i.test(body)) {
       const feed = parseFeed(body);
       return { kind: body.includes("<feed") ? "atom" : "rss", canonicalUrl: canonicalUrl(url.href), displayName: feed.title || url.hostname };
     }

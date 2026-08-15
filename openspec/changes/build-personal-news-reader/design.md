@@ -62,6 +62,7 @@ RSS/Atom、Hacker News、Bluesky、Zennの各アダプターは、取得位置�
 アダプターは外部応答を保存形式へ直接書き込まず、正規化層へ渡す。
 
 RSSとZennはフィードを使用し、Hacker Newsは公開API、BlueskyはAT Protocolの公開AppView APIを使用する。
+RSSフィードはRSS 2.0に加えてRSS 1.0/RDFを扱い、名前空間付きの公開日時と配信本文を正規化する。
 ブラウザー操作による収集は、画面変更と利用規約の影響を受けやすいため通常の取得手段に含めない。
 
 ### 正規URLと出所関係で重複を扱う

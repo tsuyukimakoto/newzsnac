@@ -8,8 +8,20 @@ function array<T>(value: T | readonly T[] | undefined): readonly T[] {
   return Array.isArray(value) ? value as readonly T[] : [value as T];
 }
 
+function decodeCharacterReferences(value: string): string {
+  return value.replace(/&#(?:x([\da-f]+)|(\d+));/gi, (reference, hexadecimal: string | undefined, decimal: string | undefined) => {
+    const codePoint = Number.parseInt(hexadecimal ?? decimal ?? "", hexadecimal ? 16 : 10);
+    if (!Number.isInteger(codePoint) || codePoint > 0x10ffff) return reference;
+    try {
+      return String.fromCodePoint(codePoint);
+    } catch {
+      return reference;
+    }
+  });
+}
+
 function text(value: unknown): string {
-  if (typeof value === "string") return value;
+  if (typeof value === "string") return decodeCharacterReferences(value);
   if (typeof value === "number") return String(value);
   if (value && typeof value === "object" && "#text" in value) {
     return text((value as { "#text": unknown })["#text"]);
@@ -48,6 +60,23 @@ export function parseFeed(xml: string): ParsedFeed {
           title: text(item.title),
           url: text(item.link) || text(item.guid),
           publishedAt: text(item.pubDate) || text(item.date) || null,
+          content: text(item["content:encoded"]) || text(item.description) || undefined,
+        };
+      }).filter((item) => item.url.length > 0),
+    };
+  }
+
+  const rdf = document["rdf:RDF"] as Record<string, unknown> | undefined;
+  if (rdf) {
+    const channel = rdf.channel as Record<string, unknown> | undefined;
+    return {
+      title: text(channel?.title),
+      items: array(rdf.item).map((entry) => {
+        const item = entry as Record<string, unknown>;
+        return {
+          title: text(item.title),
+          url: text(item.link) || text(item["@_rdf:about"]),
+          publishedAt: text(item["dc:date"]) || text(item.date) || null,
           content: text(item["content:encoded"]) || text(item.description) || undefined,
         };
       }).filter((item) => item.url.length > 0),

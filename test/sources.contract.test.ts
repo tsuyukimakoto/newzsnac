@@ -9,6 +9,23 @@ const feed = `<?xml version="1.0"?><rss><channel><title>Example Feed</title>
   <item><title>Second</title><link>https://example.com/second</link><pubDate>Thu, 14 Aug 2026 00:00:00 GMT</pubDate></item>
 </channel></rss>`;
 
+const rdfFeed = `<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+  xmlns="http://purl.org/rss/1.0/"
+  xmlns:dc="http://purl.org/dc/elements/1.1/"
+  xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel rdf:about="https://b.hatena.ne.jp/hotentry/it.rss">
+    <title>&#x306F;&#x3066;&#x306A;ブックマーク - テクノロジー</title>
+    <link>https://b.hatena.ne.jp/hotentry/it</link>
+  </channel>
+  <item rdf:about="https://example.com/rdf-item">
+    <title>RSS 1.0 &#x8A18;&#x4E8B;</title>
+    <link>https://example.com/rdf-item</link>
+    <dc:date>2026-08-14T19:21:13Z</dc:date>
+    <content:encoded>&lt;p&gt;RDF content&lt;/p&gt;</content:encoded>
+  </item>
+</rdf:RDF>`;
+
 function fakeFetch(): typeof fetch {
   return async (input) => {
     const url = String(input);
@@ -22,6 +39,16 @@ function fakeFetch(): typeof fetch {
     }
     if (url === "https://example.com/feed.xml") {
       return new Response(feed, { headers: { "content-type": "application/rss+xml" } });
+    }
+    if (url === "https://b.hatena.ne.jp/hotentry/it") {
+      return new Response('<link rel="alternate" type="application/rss+xml" href="/hotentry/it.rss">', {
+        headers: { "content-type": "text/html" },
+      });
+    }
+    if (url === "https://b.hatena.ne.jp/hotentry/it.rss") {
+      return new Response(rdfFeed, {
+        headers: { "content-type": "application/xml" },
+      });
     }
     throw new Error(`Unexpected request: ${url}`);
   };
@@ -86,5 +113,24 @@ test("invalid OPML is rejected", async () => {
     await assert.rejects(() => service.importOpml("<html></html>"), /valid OPML/);
   } finally {
     database.close();
+  }
+});
+
+test("RSS 1.0 sources resolve from direct and webpage URLs with namespaced fields", async () => {
+  const resolver = new SourceResolver(fakeFetch());
+
+  for (const input of ["https://b.hatena.ne.jp/hotentry/it.rss", "https://b.hatena.ne.jp/hotentry/it"]) {
+    const source = await resolver.resolve(input);
+    assert.equal(source.kind, "rss");
+    assert.equal(source.canonicalUrl, "https://b.hatena.ne.jp/hotentry/it.rss");
+    assert.equal(source.displayName, "はてなブックマーク - テクノロジー");
+
+    const preview = await resolver.preview(source, new Set());
+    assert.deepEqual(preview.recentItems[0], {
+      title: "RSS 1.0 記事",
+      url: "https://example.com/rdf-item",
+      publishedAt: "2026-08-14T19:21:13Z",
+      content: "<p>RDF content</p>",
+    });
   }
 });
