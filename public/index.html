@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Newzsnac</title>
+    <link rel="stylesheet" href="/app.css">
+  </head>
+  <body>
+    <div class="masthead">
+      <div class="wordmark">NEWZ<span>SNAC</span></div>
+      <div class="edition">PERSONAL EDITION <b>№ 001</b></div>
+      <label class="search"><span>⌕</span><input id="search" placeholder="記事を検索  /" aria-label="記事を検索"></label>
+      <button class="new-count" id="new-count" hidden>新着 <b>0</b>件</button>
+    </div>
+    <main class="workspace">
+      <aside class="sources" aria-label="情報源">
+        <div class="section-label">SOURCES</div>
+        <nav id="sources">
+          <button class="source active"><span>すべての記事</span><b>248</b></button>
+          <button class="source"><span>保存済み</span><b>17</b></button>
+          <div class="rule"></div>
+          <button class="source"><i class="dot rust"></i><span>Engineering</span><b>86</b></button>
+          <button class="source"><i class="dot blue"></i><span>Hacker News</span><b>43</b></button>
+          <button class="source"><i class="dot green"></i><span>Bluesky</span><b>71</b></button>
+          <button class="source"><i class="dot gold"></i><span>Zenn</span><b>48</b></button>
+        </nav>
+        <button class="discover">＋ 情報源を発見</button>
+        <div class="local-status"><i></i><span>LOCAL<br><small>SQLite · Qwen</small></span></div>
+      </aside>
+      <section class="stream" aria-label="記事一覧">
+        <header class="stream-head"><div><span class="section-label">INBOX</span><h1>今日の読みもの</h1></div><button id="sort">おすすめ順⌄</button></header>
+        <div class="stream-meta"><span>未読 248</span><span>約 3時間12分</span></div>
+        <div id="article-list" class="article-list" role="listbox" tabindex="0"><div id="article-spacer"></div></div>
+        <div id="empty" class="empty"><b>収集した記事はまだありません</b><span>情報源を追加するか、収集ワーカーを起動してください。</span></div>
+      </section>
+      <article class="reader" id="reader" aria-live="polite">
+        <div class="reader-empty"><span class="big-mark">N</span><p>記事を選ぶと、ここに本文を表示します。</p><kbd>j</kbd><span>で次の記事へ</span></div>
+      </article>
+    </main>
+    <footer class="keybar"><span><kbd>j</kbd><kbd>k</kbd> 移動</span><span><kbd>Space</kbd> 精読</span><span><kbd>s</kbd> 保存</span><span><kbd>u</kbd> 未読</span><span><kbd>t</kbd> 翻訳</span><span><kbd>o</kbd> 原文</span><span><kbd>/</kbd> 検索</span><span class="mode" id="mode">高速モード</span></footer>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

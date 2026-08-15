@@ -1,0 +1,25 @@
+{
+  "name": "newzsnac",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "cli": "node dist/src/cli.js",
+    "worker:collection": "node dist/src/workers/collection.js",
+    "worker:analysis": "node dist/src/workers/analysis.js",
+    "test": "npm run build && node --test dist/**/*.test.js"
+  },
+  "devDependencies": {
+    "@playwright/cli": "^0.1.17",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.0"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^5.10.1"
+  }
+}
