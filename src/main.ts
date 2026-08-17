@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import { openDatabase } from "./db/database.js";
+import { claimRuntimeFile, releaseRuntimeFile, type RuntimeRecord } from "./runtime.js";
 
 const entries = [
   ["server.js"],
@@ -11,8 +12,13 @@ const entries = [
 
 const children: ChildProcess[] = [];
 let stopping = false;
+const config = loadConfig();
+const runtimeRecord: RuntimeRecord = { pid: process.pid, cwd: process.cwd() };
 
-const bootstrapDatabase = openDatabase(loadConfig().databasePath);
+claimRuntimeFile(config.pidPath, runtimeRecord);
+process.on("exit", () => releaseRuntimeFile(config.pidPath, runtimeRecord));
+
+const bootstrapDatabase = openDatabase(config.databasePath);
 bootstrapDatabase.close();
 
 function stop(signal: NodeJS.Signals = "SIGTERM"): void {
@@ -39,4 +45,3 @@ for (const [entry, ...arguments_] of entries) {
 
 process.on("SIGINT", () => stop("SIGINT"));
 process.on("SIGTERM", () => stop("SIGTERM"));
-process.on("exit", () => stop());

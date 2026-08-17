@@ -20,6 +20,11 @@ description = "Build and start the web server and both workers"
 depends = ["build"]
 run = "node dist/src/main.js"
 
+[tasks.stop]
+description = "Build and stop the running web server and both workers"
+depends = ["build"]
+run = "node dist/src/stop.js"
+
 [tasks.server]
 description = "Build and start only the web server"
 depends = ["build"]

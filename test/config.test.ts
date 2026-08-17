@@ -9,9 +9,11 @@ test("loadConfig returns local-first defaults", () => {
   const config = loadConfig({}, "/tmp/newzsnac-test");
 
   assert.equal(config.databasePath, "/tmp/newzsnac-test/data/newzsnac.sqlite");
+  assert.equal(config.pidPath, "/tmp/newzsnac-test/data/newzsnac.pid");
   assert.equal(config.lmStudioUrl.href, "http://127.0.0.1:1234/v1");
   assert.equal(config.lmStudioModel, "qwen");
-  assert.equal(config.freeformReasoningEffort, "medium");
+  assert.equal(config.lmStudioReasoningEffort, "medium");
+  assert.equal(config.analysisTelemetryEnabled, false);
   assert.equal(config.embeddingModel, null);
   assert.equal(config.embeddingMaxCharacters, 12_000);
   assert.equal(config.embeddingInputVersion, "embedding-v1");
@@ -28,36 +30,53 @@ test("loadConfig preserves SQLite's in-memory database name", () => {
   assert.equal(loadConfig({ NEWSZNAC_DATABASE_PATH: ":memory:" }).databasePath, ":memory:");
 });
 
+test("loadConfig validates the runtime PID path", () => {
+  assert.equal(
+    loadConfig({ NEWSZNAC_PID_PATH: "/tmp/custom-newzsnac.pid" }).pidPath,
+    "/tmp/custom-newzsnac.pid",
+  );
+  assert.throws(() => loadConfig({ NEWSZNAC_PID_PATH: " " }), /NEWSZNAC_PID_PATH must not be empty/);
+});
+
 test("loadConfig reads .env while process environment takes precedence", () => {
   const directory = mkdtempSync(join(tmpdir(), "newzsnac-config-"));
   writeFileSync(join(directory, ".env"), [
     "NEWSZNAC_DATABASE_PATH=var/local-reader.sqlite",
+    "NEWSZNAC_PID_PATH=var/newzsnac.pid",
     "NEWSZNAC_LM_STUDIO_URL=http://localhost:2234/v1",
     "NEWSZNAC_LM_STUDIO_MODEL=qwen/from-dotenv",
-    "NEWSZNAC_FREEFORM_REASONING_EFFORT=low",
+    "NEWSZNAC_LM_STUDIO_REASONING_EFFORT=low",
+    "NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED=true",
     "NEWSZNAC_PORT=5317",
   ].join("\n"));
 
   const fromFile = loadConfig(undefined, directory);
   assert.equal(fromFile.databasePath, join(directory, "var/local-reader.sqlite"));
+  assert.equal(fromFile.pidPath, join(directory, "var/newzsnac.pid"));
   assert.equal(fromFile.lmStudioUrl.href, "http://localhost:2234/v1");
   assert.equal(fromFile.lmStudioModel, "qwen/from-dotenv");
-  assert.equal(fromFile.freeformReasoningEffort, "low");
+  assert.equal(fromFile.lmStudioReasoningEffort, "low");
+  assert.equal(fromFile.analysisTelemetryEnabled, true);
   assert.equal(fromFile.port, 5317);
 
   const previous = process.env.NEWSZNAC_LM_STUDIO_MODEL;
-  const previousEffort = process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT;
+  const previousEffort = process.env.NEWSZNAC_LM_STUDIO_REASONING_EFFORT;
+  const previousTelemetry = process.env.NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED;
   process.env.NEWSZNAC_LM_STUDIO_MODEL = "qwen/from-process";
-  process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT = "high";
+  process.env.NEWSZNAC_LM_STUDIO_REASONING_EFFORT = "high";
+  process.env.NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED = "false";
   try {
     const fromProcess = loadConfig(undefined, directory);
     assert.equal(fromProcess.lmStudioModel, "qwen/from-process");
-    assert.equal(fromProcess.freeformReasoningEffort, "high");
+    assert.equal(fromProcess.lmStudioReasoningEffort, "high");
+    assert.equal(fromProcess.analysisTelemetryEnabled, false);
   } finally {
     if (previous === undefined) delete process.env.NEWSZNAC_LM_STUDIO_MODEL;
     else process.env.NEWSZNAC_LM_STUDIO_MODEL = previous;
-    if (previousEffort === undefined) delete process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT;
-    else process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT = previousEffort;
+    if (previousEffort === undefined) delete process.env.NEWSZNAC_LM_STUDIO_REASONING_EFFORT;
+    else process.env.NEWSZNAC_LM_STUDIO_REASONING_EFFORT = previousEffort;
+    if (previousTelemetry === undefined) delete process.env.NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED;
+    else process.env.NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED = previousTelemetry;
   }
 });
 
@@ -68,11 +87,20 @@ test("loadConfig rejects a non-local LM Studio endpoint", () => {
   );
 });
 
-test("loadConfig validates freeform reasoning effort", () => {
-  assert.equal(loadConfig({ NEWSZNAC_FREEFORM_REASONING_EFFORT: "high" }).freeformReasoningEffort, "high");
+test("loadConfig validates LM Studio reasoning effort", () => {
+  assert.equal(loadConfig({ NEWSZNAC_LM_STUDIO_REASONING_EFFORT: "high" }).lmStudioReasoningEffort, "high");
   assert.throws(
-    () => loadConfig({ NEWSZNAC_FREEFORM_REASONING_EFFORT: "xhigh" }),
-    /NEWSZNAC_FREEFORM_REASONING_EFFORT must be none, low, medium, or high/,
+    () => loadConfig({ NEWSZNAC_LM_STUDIO_REASONING_EFFORT: "xhigh" }),
+    /NEWSZNAC_LM_STUDIO_REASONING_EFFORT must be none, low, medium, or high/,
+  );
+});
+
+test("loadConfig validates the analysis telemetry toggle", () => {
+  assert.equal(loadConfig({ NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED: "true" }).analysisTelemetryEnabled, true);
+  assert.equal(loadConfig({ NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED: "false" }).analysisTelemetryEnabled, false);
+  assert.throws(
+    () => loadConfig({ NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED: "yes" }),
+    /NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED must be true or false/,
   );
 });
 

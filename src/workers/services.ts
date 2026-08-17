@@ -4,7 +4,7 @@ import { CollectionCoordinator, type CollectionOutcome } from "../collection/coo
 import { extractArticle, ItemRepository } from "../collection/normalize.js";
 import type { CollectedItem } from "../collection/types.js";
 import type { AppConfig } from "../config.js";
-import { LmStudioClient } from "../enrichment/client.js";
+import { LmStudioClient, type AnalysisLogger } from "../enrichment/client.js";
 import { EnrichmentService, EnrichmentWorker } from "../enrichment/service.js";
 import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
 import type { Fetch } from "../sources/resolver.js";
@@ -78,7 +78,13 @@ export async function runAnalysisCycle(
   }
   const worker = new EnrichmentWorker(
     database,
-    new LmStudioClient(config.lmStudioUrl, fetcher, config.analysisMaxCharacters, config.freeformReasoningEffort),
+    new LmStudioClient(
+      config.lmStudioUrl,
+      fetcher,
+      config.analysisMaxCharacters,
+      config.lmStudioReasoningEffort,
+      createAnalysisLogger(config.analysisTelemetryEnabled),
+    ),
     `analysis-${process.pid}`,
     new RecommendationService(database, config),
   );
@@ -88,4 +94,12 @@ export async function runAnalysisCycle(
     processed += 1;
   }
   return { processed };
+}
+
+export function createAnalysisLogger(
+  enabled: boolean,
+  writer: (line: string) => unknown = (line) => process.stdout.write(line),
+): AnalysisLogger | undefined {
+  if (!enabled) return undefined;
+  return (event) => writer(`${JSON.stringify(event)}\n`);
 }

@@ -63,9 +63,18 @@ test("web application starts on loopback and reports readiness", async (context)
 test("normal start supervises web, collection, and analysis processes on one SQLite file", async (context) => {
   const directory = mkdtempSync(join(tmpdir(), "newzsnac-startup-"));
   context.after(() => rmSync(directory, { recursive: true, force: true }));
+  const pidPath = join(directory, "newzsnac.pid");
   const child = spawn(process.execPath, [resolve(sourceRoot, "main.js")], {
-    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: join(directory, "reader.sqlite") },
+    env: {
+      ...process.env,
+      NEWSZNAC_PORT: "0",
+      NEWSZNAC_DATABASE_PATH: join(directory, "reader.sqlite"),
+      NEWSZNAC_PID_PATH: pidPath,
+    },
     stdio: ["ignore", "pipe", "pipe"],
+  });
+  context.after(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
   });
   let output = "";
   let errorOutput = "";
@@ -79,7 +88,19 @@ test("normal start supervises web, collection, and analysis processes on one SQL
     if (Date.now() >= deadline) throw new Error(`services were not all ready: ${output}\n${errorOutput}`);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));
   }
-  child.kill("SIGTERM");
+  const stopped = spawnSync(process.execPath, [resolve(sourceRoot, "stop.js")], {
+    encoding: "utf8",
+    env: { ...process.env, NEWSZNAC_PID_PATH: pidPath },
+  });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.deepEqual(JSON.parse(stopped.stdout), { service: "newzsnac", status: "stopped" });
   const [code, signal] = await once(child, "exit") as [number | null, NodeJS.Signals | null];
-  assert.ok(code === 0 || signal === "SIGTERM", `unexpected supervisor exit: ${String(code)} ${String(signal)}`);
+  assert.equal(code, 0, `unexpected supervisor exit: ${String(code)} ${String(signal)}`);
+
+  const stoppedAgain = spawnSync(process.execPath, [resolve(sourceRoot, "stop.js")], {
+    encoding: "utf8",
+    env: { ...process.env, NEWSZNAC_PID_PATH: pidPath },
+  });
+  assert.equal(stoppedAgain.status, 0, stoppedAgain.stderr);
+  assert.deepEqual(JSON.parse(stoppedAgain.stdout), { service: "newzsnac", status: "already-stopped" });
 });

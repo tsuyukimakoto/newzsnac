@@ -4,9 +4,11 @@ import { parseEnv } from "node:util";
 
 export interface AppConfig {
   readonly databasePath: string;
+  readonly pidPath: string;
   readonly lmStudioUrl: URL;
   readonly lmStudioModel: string;
-  readonly freeformReasoningEffort: FreeformReasoningEffort;
+  readonly lmStudioReasoningEffort: LmStudioReasoningEffort;
+  readonly analysisTelemetryEnabled: boolean;
   readonly embeddingModel: string | null;
   readonly embeddingMaxCharacters: number;
   readonly embeddingInputVersion: string;
@@ -19,15 +21,17 @@ export interface AppConfig {
   readonly port: number;
 }
 
-export type FreeformReasoningEffort = "none" | "low" | "medium" | "high";
+export type LmStudioReasoningEffort = "none" | "low" | "medium" | "high";
 
 export type ConfigEnvironment = Readonly<Record<string, string | undefined>>;
 
 export const CONFIG_DEFAULTS = Object.freeze({
   databasePath: "data/newzsnac.sqlite",
+  pidPath: "data/newzsnac.pid",
   lmStudioUrl: "http://127.0.0.1:1234/v1",
   lmStudioModel: "qwen",
-  freeformReasoningEffort: "medium" as const,
+  lmStudioReasoningEffort: "medium" as const,
+  analysisTelemetryEnabled: false,
   embeddingModel: null,
   embeddingMaxCharacters: 12_000,
   embeddingInputVersion: "embedding-v1",
@@ -83,10 +87,17 @@ function optionalNonEmpty(value: string | undefined, name: string): string | nul
   return value.trim();
 }
 
-function parseFreeformReasoningEffort(value: string | undefined): FreeformReasoningEffort {
-  const actual = value ?? CONFIG_DEFAULTS.freeformReasoningEffort;
+function parseLmStudioReasoningEffort(value: string | undefined): LmStudioReasoningEffort {
+  const actual = value ?? CONFIG_DEFAULTS.lmStudioReasoningEffort;
   if (actual === "none" || actual === "low" || actual === "medium" || actual === "high") return actual;
-  throw new Error("NEWSZNAC_FREEFORM_REASONING_EFFORT must be none, low, medium, or high");
+  throw new Error("NEWSZNAC_LM_STUDIO_REASONING_EFFORT must be none, low, medium, or high");
+}
+
+function parseBoolean(value: string | undefined, fallback: boolean, name: string): boolean {
+  if (value === undefined) return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false`);
 }
 
 function integerInRange(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number): number {
@@ -119,16 +130,28 @@ export function loadConfig(
     : isAbsolute(configuredPath)
     ? configuredPath
     : resolve(workingDirectory, configuredPath);
+  const configuredPidPath = actualEnvironment.NEWSZNAC_PID_PATH ?? CONFIG_DEFAULTS.pidPath;
+  if (configuredPidPath.trim().length === 0) {
+    throw new Error("NEWSZNAC_PID_PATH must not be empty");
+  }
+  const pidPath = isAbsolute(configuredPidPath)
+    ? configuredPidPath
+    : resolve(workingDirectory, configuredPidPath);
 
   if (databasePath.trim().length === 0) {
     throw new Error("NEWSZNAC_DATABASE_PATH must not be empty");
   }
-
   return {
     databasePath,
+    pidPath,
     lmStudioUrl: parseLmStudioUrl(actualEnvironment.NEWSZNAC_LM_STUDIO_URL),
     lmStudioModel: nonEmpty(actualEnvironment.NEWSZNAC_LM_STUDIO_MODEL, CONFIG_DEFAULTS.lmStudioModel, "NEWSZNAC_LM_STUDIO_MODEL"),
-    freeformReasoningEffort: parseFreeformReasoningEffort(actualEnvironment.NEWSZNAC_FREEFORM_REASONING_EFFORT),
+    lmStudioReasoningEffort: parseLmStudioReasoningEffort(actualEnvironment.NEWSZNAC_LM_STUDIO_REASONING_EFFORT),
+    analysisTelemetryEnabled: parseBoolean(
+      actualEnvironment.NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED,
+      CONFIG_DEFAULTS.analysisTelemetryEnabled,
+      "NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED",
+    ),
     embeddingModel: optionalNonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
     embeddingMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, CONFIG_DEFAULTS.embeddingMaxCharacters, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
     embeddingInputVersion: nonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_INPUT_VERSION, CONFIG_DEFAULTS.embeddingInputVersion, "NEWSZNAC_EMBEDDING_INPUT_VERSION"),

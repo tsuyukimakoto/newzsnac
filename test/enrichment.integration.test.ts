@@ -4,6 +4,7 @@ import { openDatabase } from "../src/db/database.js";
 import { LmStudioClient } from "../src/enrichment/client.js";
 import { EnrichmentService, EnrichmentWorker, deterministicPreScore } from "../src/enrichment/service.js";
 import { analysisJsonSchema, validateAnalysis } from "../src/enrichment/schema.js";
+import { createAnalysisLogger } from "../src/workers/services.js";
 
 function addItem(database: ReturnType<typeof openDatabase>): number {
   const timestamp = "2026-08-15T00:00:00.000Z";
@@ -41,15 +42,59 @@ test("analysis validates structured output, stores valid results, and orders det
   } finally { database.close(); }
 });
 
-test("analysis disables reasoning and rejects reasoning without final structured content", async () => {
+test("analysis uses configured reasoning and output limit while rejecting reasoning without final structured content", async () => {
   assert.equal("uniqueItems" in analysisJsonSchema.properties.labels, false);
   let requestBody: Record<string, unknown> | undefined;
+  const telemetry: unknown[] = [];
   const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async (_input, init) => {
     requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
-    return Response.json({ choices: [{ message: { content: "", reasoning_content: JSON.stringify(valid) } }] });
-  });
+    return Response.json({
+      choices: [{ finish_reason: "length", message: { content: "", reasoning_content: JSON.stringify(valid) } }],
+      usage: { prompt_tokens: 100, completion_tokens: 8_096, completion_tokens_details: { reasoning_tokens: 8_096 } },
+    });
+  }, 12_000, "medium", (event) => telemetry.push(event), () => 1_000);
   await assert.rejects(() => client.analyze("qwen", "Title", "Body"), /structured content/);
-  assert.equal(requestBody?.reasoning_effort, "none");
+  assert.equal(requestBody?.reasoning_effort, "medium");
+  assert.equal(requestBody?.max_tokens, 8_096);
+  assert.deepEqual(telemetry, [{
+    service: "analysis-worker", event: "analysis-completion", effort: "medium", maxOutputTokens: 8_096,
+    finishReason: "length", promptTokens: 100, completionTokens: 8_096, reasoningTokens: 8_096,
+    contentCharacters: 0, durationMs: 0, validation: "failed", failure: "missing-content",
+  }]);
+  assert.doesNotMatch(JSON.stringify(telemetry), /Title|Body|summaryJa/);
+});
+
+test("analysis logs successful token usage without article content", async () => {
+  const telemetry: unknown[] = [];
+  const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => Response.json({
+    choices: [{ finish_reason: "stop", message: { content: JSON.stringify(valid), reasoning_content: "private reasoning" } }],
+    usage: { prompt_tokens: 250, completion_tokens: 700, completion_tokens_details: { reasoning_tokens: 400 } },
+  }), 12_000, "medium", (event) => telemetry.push(event), () => 1_000);
+  assert.deepEqual(await client.analyze("qwen", "Secret title", "Secret body"), valid);
+  assert.deepEqual(telemetry, [{
+    service: "analysis-worker", event: "analysis-completion", effort: "medium", maxOutputTokens: 8_096,
+    finishReason: "stop", promptTokens: 250, completionTokens: 700, reasoningTokens: 400,
+    contentCharacters: JSON.stringify(valid).length, durationMs: 0, validation: "succeeded",
+  }]);
+  assert.doesNotMatch(JSON.stringify(telemetry), /Secret|private reasoning|ローカルAI/);
+});
+
+test("analysis telemetry logger is disabled by default and writes one JSON line when enabled", () => {
+  const lines: string[] = [];
+  assert.equal(createAnalysisLogger(false, (line) => lines.push(line)), undefined);
+  const logger = createAnalysisLogger(true, (line) => lines.push(line));
+  assert.ok(logger);
+  logger({
+    service: "analysis-worker", event: "analysis-completion", effort: "medium", maxOutputTokens: 8_096,
+    finishReason: "stop", promptTokens: 100, completionTokens: 200, reasoningTokens: 50,
+    contentCharacters: 300, durationMs: 400, validation: "succeeded",
+  });
+  assert.equal(lines.length, 1);
+  assert.deepEqual(JSON.parse(lines[0]!), {
+    service: "analysis-worker", event: "analysis-completion", effort: "medium", maxOutputTokens: 8_096,
+    finishReason: "stop", promptTokens: 100, completionTokens: 200, reasoningTokens: 50,
+    contentCharacters: 300, durationMs: 400, validation: "succeeded",
+  });
 });
 
 test("analysis deterministically keeps the beginning and end within its character limit", async () => {

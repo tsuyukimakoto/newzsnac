@@ -363,7 +363,7 @@ export function createApplicationOperations(database: DatabaseSync, config: AppC
     config.lmStudioUrl,
     fetcher,
     config.analysisMaxCharacters,
-    config.freeformReasoningEffort,
+    config.lmStudioReasoningEffort,
   ), config.chatContextMaxCharacters);
   return new ApplicationOperations(
     database, resolver, sources, new DiscoveryService(database, resolver, sources),
