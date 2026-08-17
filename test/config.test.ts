@@ -11,6 +11,7 @@ test("loadConfig returns local-first defaults", () => {
   assert.equal(config.databasePath, "/tmp/newzsnac-test/data/newzsnac.sqlite");
   assert.equal(config.lmStudioUrl.href, "http://127.0.0.1:1234/v1");
   assert.equal(config.lmStudioModel, "qwen");
+  assert.equal(config.freeformReasoningEffort, "medium");
   assert.equal(config.embeddingModel, null);
   assert.equal(config.embeddingMaxCharacters, 12_000);
   assert.equal(config.embeddingInputVersion, "embedding-v1");
@@ -33,6 +34,7 @@ test("loadConfig reads .env while process environment takes precedence", () => {
     "NEWSZNAC_DATABASE_PATH=var/local-reader.sqlite",
     "NEWSZNAC_LM_STUDIO_URL=http://localhost:2234/v1",
     "NEWSZNAC_LM_STUDIO_MODEL=qwen/from-dotenv",
+    "NEWSZNAC_FREEFORM_REASONING_EFFORT=low",
     "NEWSZNAC_PORT=5317",
   ].join("\n"));
 
@@ -40,15 +42,22 @@ test("loadConfig reads .env while process environment takes precedence", () => {
   assert.equal(fromFile.databasePath, join(directory, "var/local-reader.sqlite"));
   assert.equal(fromFile.lmStudioUrl.href, "http://localhost:2234/v1");
   assert.equal(fromFile.lmStudioModel, "qwen/from-dotenv");
+  assert.equal(fromFile.freeformReasoningEffort, "low");
   assert.equal(fromFile.port, 5317);
 
   const previous = process.env.NEWSZNAC_LM_STUDIO_MODEL;
+  const previousEffort = process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT;
   process.env.NEWSZNAC_LM_STUDIO_MODEL = "qwen/from-process";
+  process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT = "high";
   try {
-    assert.equal(loadConfig(undefined, directory).lmStudioModel, "qwen/from-process");
+    const fromProcess = loadConfig(undefined, directory);
+    assert.equal(fromProcess.lmStudioModel, "qwen/from-process");
+    assert.equal(fromProcess.freeformReasoningEffort, "high");
   } finally {
     if (previous === undefined) delete process.env.NEWSZNAC_LM_STUDIO_MODEL;
     else process.env.NEWSZNAC_LM_STUDIO_MODEL = previous;
+    if (previousEffort === undefined) delete process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT;
+    else process.env.NEWSZNAC_FREEFORM_REASONING_EFFORT = previousEffort;
   }
 });
 
@@ -56,6 +65,14 @@ test("loadConfig rejects a non-local LM Studio endpoint", () => {
   assert.throws(
     () => loadConfig({ NEWSZNAC_LM_STUDIO_URL: "https://example.com/v1" }),
     /must point to this computer/,
+  );
+});
+
+test("loadConfig validates freeform reasoning effort", () => {
+  assert.equal(loadConfig({ NEWSZNAC_FREEFORM_REASONING_EFFORT: "high" }).freeformReasoningEffort, "high");
+  assert.throws(
+    () => loadConfig({ NEWSZNAC_FREEFORM_REASONING_EFFORT: "xhigh" }),
+    /NEWSZNAC_FREEFORM_REASONING_EFFORT must be none, low, medium, or high/,
   );
 });
 

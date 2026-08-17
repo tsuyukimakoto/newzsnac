@@ -1,5 +1,5 @@
 import type { Fetch } from "../sources/resolver.js";
-import { CONFIG_DEFAULTS } from "../config.js";
+import { CONFIG_DEFAULTS, type FreeformReasoningEffort } from "../config.js";
 import { analysisJsonSchema, validateAnalysis, type AnalysisResult } from "./schema.js";
 
 export interface ChatCompletionMessage {
@@ -12,6 +12,7 @@ export class LmStudioClient {
     private readonly endpoint: URL,
     private readonly fetcher: Fetch = globalThis.fetch,
     private readonly analysisMaxCharacters: number = CONFIG_DEFAULTS.analysisMaxCharacters,
+    private readonly reasoningEffort: FreeformReasoningEffort = CONFIG_DEFAULTS.freeformReasoningEffort,
   ) {}
 
   async analyze(model: string, title: string, content: string): Promise<AnalysisResult> {
@@ -46,7 +47,7 @@ export class LmStudioClient {
     const url = new URL(`${this.endpoint.pathname.replace(/\/$/, "")}/chat/completions`, this.endpoint);
     const response = await this.fetcher(url, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, temperature: 0, messages: [{ role: "user", content: `次の全文を日本語へ翻訳してください。\n${content}` }] }),
+      body: JSON.stringify({ model, reasoning_effort: this.reasoningEffort, temperature: 0, messages: [{ role: "user", content: `次の全文を日本語へ翻訳してください。\n${content}` }] }),
     });
     if (!response.ok) throw new Error(`LM Studio returned HTTP ${response.status}: ${(await response.text()).slice(0, 1_000)}`);
     const body = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
@@ -59,7 +60,7 @@ export class LmStudioClient {
     const url = new URL(`${this.endpoint.pathname.replace(/\/$/, "")}/chat/completions`, this.endpoint);
     const response = await this.fetcher(url, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, temperature: 0.2, max_tokens: 4_096, stream: false, messages }),
+      body: JSON.stringify({ model, reasoning_effort: this.reasoningEffort, temperature: 0.2, max_tokens: 4_096, stream: false, messages }),
     });
     if (!response.ok) throw new Error(`LM Studio chat returned HTTP ${response.status}: ${(await response.text()).slice(0, 1_000)}`);
     const body = await response.json() as { choices?: Array<{ finish_reason?: string; message?: { content?: string } }> };

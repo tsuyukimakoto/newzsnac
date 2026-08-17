@@ -359,7 +359,12 @@ export function createApplicationOperations(database: DatabaseSync, config: AppC
   const resolver = new SourceResolver(fetcher);
   const sources = new SourceService(database, resolver);
   const recommendations = new RecommendationService(database, config);
-  const chat = new ArticleChatService(database, new LmStudioClient(config.lmStudioUrl, fetcher), config.chatContextMaxCharacters);
+  const chat = new ArticleChatService(database, new LmStudioClient(
+    config.lmStudioUrl,
+    fetcher,
+    config.analysisMaxCharacters,
+    config.freeformReasoningEffort,
+  ), config.chatContextMaxCharacters);
   return new ApplicationOperations(
     database, resolver, sources, new DiscoveryService(database, resolver, sources),
     new ReadingService(database, config.embeddingModel ?? "__disabled__", config.embeddingInputVersion,

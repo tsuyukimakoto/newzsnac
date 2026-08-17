@@ -118,6 +118,7 @@ LM Studioが停止している場合は問答欄にエラーが表示されま�
 NEWSZNAC_DATABASE_PATH=data/newzsnac.sqlite
 NEWSZNAC_LM_STUDIO_URL=http://127.0.0.1:1234/v1
 NEWSZNAC_LM_STUDIO_MODEL=qwen/qwen3.8-27b
+NEWSZNAC_FREEFORM_REASONING_EFFORT=medium
 NEWSZNAC_ANALYSIS_MAX_CHARACTERS=12000
 NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
@@ -129,6 +130,7 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 | `NEWSZNAC_HOST` | `127.0.0.1` | Web画面の待受先。ループバックのみ |
 | `NEWSZNAC_LM_STUDIO_URL` | `http://127.0.0.1:1234/v1` | LM StudioのOpenAI互換API |
 | `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析、翻訳、記事問答に使うモデルID |
+| `NEWSZNAC_FREEFORM_REASONING_EFFORT` | `medium` | 全文翻訳と記事問答の推論量。`none`、`low`、`medium`、`high` |
 | `NEWSZNAC_ANALYSIS_MAX_CHARACTERS` | `12000` | 分析時にLM Studioへ渡す記事本文の最大文字数。超過時は冒頭と末尾を保持 |
 | `NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS` | `24000` | 記事問答でLM Studioへ渡す文脈の最大文字数 |
 | `NEWSZNAC_EMBEDDING_MODEL` | 未設定 | 記事ベクトルに使うLM Studioの埋め込みモデルID |
@@ -137,6 +139,8 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 | `NEWSZNAC_RECOMMENDATION_SIMILARITY_THRESHOLD` | `0.86` | 「読むべきかも？」に表示する最低類似度 |
 | `NEWSZNAC_ANALYSIS_PROMPT_VERSION` | `analysis-v2` | 分析結果のプロンプト版 |
 | `NEWSZNAC_TRANSLATION_PROMPT_VERSION` | `translate-v1` | 翻訳結果のプロンプト版 |
+
+`NEWSZNAC_FREEFORM_REASONING_EFFORT`はLM Studioのモデルロード設定ではなく、Newzsnacが翻訳と記事問答の各リクエストへ指定する値です。記事の要約・KEY POINTS生成は、構造化された最終回答を安定して得るため、この設定にかかわらず推論を`none`にします。ロード中のモデルが選択した値に対応していない場合は、LM Studioから返されたエラーを表示またはジョブへ記録します。
 
 Web、収集、分析を個別に起動する場合は、次のコマンドを使います。
 

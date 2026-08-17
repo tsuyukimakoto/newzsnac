@@ -6,6 +6,7 @@ export interface AppConfig {
   readonly databasePath: string;
   readonly lmStudioUrl: URL;
   readonly lmStudioModel: string;
+  readonly freeformReasoningEffort: FreeformReasoningEffort;
   readonly embeddingModel: string | null;
   readonly embeddingMaxCharacters: number;
   readonly embeddingInputVersion: string;
@@ -18,12 +19,15 @@ export interface AppConfig {
   readonly port: number;
 }
 
+export type FreeformReasoningEffort = "none" | "low" | "medium" | "high";
+
 export type ConfigEnvironment = Readonly<Record<string, string | undefined>>;
 
 export const CONFIG_DEFAULTS = Object.freeze({
   databasePath: "data/newzsnac.sqlite",
   lmStudioUrl: "http://127.0.0.1:1234/v1",
   lmStudioModel: "qwen",
+  freeformReasoningEffort: "medium" as const,
   embeddingModel: null,
   embeddingMaxCharacters: 12_000,
   embeddingInputVersion: "embedding-v1",
@@ -79,6 +83,12 @@ function optionalNonEmpty(value: string | undefined, name: string): string | nul
   return value.trim();
 }
 
+function parseFreeformReasoningEffort(value: string | undefined): FreeformReasoningEffort {
+  const actual = value ?? CONFIG_DEFAULTS.freeformReasoningEffort;
+  if (actual === "none" || actual === "low" || actual === "medium" || actual === "high") return actual;
+  throw new Error("NEWSZNAC_FREEFORM_REASONING_EFFORT must be none, low, medium, or high");
+}
+
 function integerInRange(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number): number {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
@@ -118,6 +128,7 @@ export function loadConfig(
     databasePath,
     lmStudioUrl: parseLmStudioUrl(actualEnvironment.NEWSZNAC_LM_STUDIO_URL),
     lmStudioModel: nonEmpty(actualEnvironment.NEWSZNAC_LM_STUDIO_MODEL, CONFIG_DEFAULTS.lmStudioModel, "NEWSZNAC_LM_STUDIO_MODEL"),
+    freeformReasoningEffort: parseFreeformReasoningEffort(actualEnvironment.NEWSZNAC_FREEFORM_REASONING_EFFORT),
     embeddingModel: optionalNonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
     embeddingMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, CONFIG_DEFAULTS.embeddingMaxCharacters, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
     embeddingInputVersion: nonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_INPUT_VERSION, CONFIG_DEFAULTS.embeddingInputVersion, "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
