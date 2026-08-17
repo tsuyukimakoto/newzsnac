@@ -18,7 +18,14 @@ test("migrations, WAL, FTS, concurrent connections, leases, and backup restore",
   context.after(() => second.close());
 
   assert.equal(first.prepare("PRAGMA journal_mode").get()?.journal_mode, "wal");
-  assert.equal(first.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 10);
+  assert.equal(first.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 11);
+  assert.deepEqual(
+    first.prepare("SELECT name, dflt_value FROM pragma_table_info('item_user_states') WHERE name IN ('is_read_later', 'read_later_at') ORDER BY name").all().map((row) => ({ ...row })),
+    [
+      { name: "is_read_later", dflt_value: "0" },
+      { name: "read_later_at", dflt_value: null },
+    ],
+  );
 
   const now = "2026-08-15T00:00:00.000Z";
   const sourceId = Number(first.prepare(`

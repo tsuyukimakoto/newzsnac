@@ -105,6 +105,69 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.match(await page.locator("#original-link").getAttribute("rel") ?? "", /noopener/);
   assert.match(await page.locator(".article-card.selected .publication").textContent() ?? "", /2026\/08\/15/);
   await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.readLater")),
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
+    page.keyboard.press("b"),
+  ]);
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.readLater")),
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
+    page.keyboard.press("b"),
+  ]);
+  assert.equal(await page.locator("#read-later-count").textContent(), "2");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("readLater=true")),
+    page.locator("#filter-read-later").click(),
+  ]);
+  assert.equal(await page.locator("#stream-title").textContent(), "あとで読む");
+  assert.deepEqual(await page.locator(".article-card h2").allTextContents(), ["First", "Second"]);
+  assert.equal(await page.locator(".read-later-check").count(), 2);
+  assert.deepEqual(await page.locator(".read-later-check").evaluateAll((nodes) => nodes.map((node) => (node as HTMLInputElement).checked)), [true, true]);
+  assert.equal(await page.locator(".article-title-link", { hasText: "First" }).getAttribute("href"), "https://example.com/1");
+  assert.equal(await page.locator(".article-title-link", { hasText: "First" }).getAttribute("target"), "_blank");
+  assert.equal(await page.locator("#read-later-selection").textContent(), "2件を選択");
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.readLaterBatch")),
+    page.waitForResponse((response) => response.url().includes("readLater=true")),
+    page.locator("#remove-read-later").click(),
+  ]);
+  assert.equal(database.prepare("SELECT count(*) AS count FROM item_user_states WHERE is_read_later=1").get()?.count, 0);
+  assert.equal(await page.locator(".article-card").count(), 0);
+
+  await page.evaluate(async () => {
+    for (const articleId of [1, 2]) {
+      await fetch("/api/operations/article.readLater", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ articleId, readLater: true }) });
+    }
+  });
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("readLater=true")),
+    page.locator("#filter-read-later").click(),
+  ]);
+
+  await page.locator("#article-list").focus();
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.readLater")),
+    page.keyboard.press("j"),
+  ]);
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
+  assert.equal(database.prepare("SELECT is_read_later FROM item_user_states WHERE item_id=1").get()?.is_read_later, 0);
+  await page.keyboard.press("k");
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "First");
+  assert.equal(database.prepare("SELECT is_read_later FROM item_user_states WHERE item_id=2").get()?.is_read_later, 1);
+
+  await page.evaluate(async () => {
+    for (const articleId of [1, 2]) {
+      await fetch("/api/operations/article.readLater", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ articleId, readLater: false }) });
+      await fetch("/api/operations/article.read", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ articleId, read: false }) });
+    }
+  });
+  await Promise.all([
+    page.waitForResponse((response) => !response.url().includes("readLater") && response.url().includes("/api/items")),
+    page.locator("#filter-all").click(),
+  ]);
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), "First");
+  await Promise.all([
     page.waitForResponse((response) => response.url().includes("status=pending")),
     page.locator("#filter-pending").click(),
   ]);
@@ -202,7 +265,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
   assert.match(await page.locator(".recommendation-note").textContent() ?? "", /First.*91%/);
   const chatQuestion = page.locator("#chat-question");
-  await chatQuestion.fill("日本語入力中 j k / s i u t o");
+  await chatQuestion.fill("日本語入力中 j k b / s i u t o");
   await chatQuestion.press("Escape");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "chat-question");
   await chatQuestion.evaluate((element) => { element.dataset.testIdentity = "stable-chat-editor"; });
@@ -215,7 +278,8 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   ]);
   assert.equal(await page.evaluate(() => document.activeElement?.id), "chat-question");
   assert.equal(await page.locator("#chat-question").getAttribute("data-test-identity"), "stable-chat-editor");
-  assert.equal(await page.locator("#chat-question").inputValue(), "日本語入力中 j k / s i u t o");
+  assert.equal(await page.locator("#chat-question").inputValue(), "日本語入力中 j k b / s i u t o");
+  assert.equal(database.prepare("SELECT is_read_later FROM item_user_states WHERE item_id=2").get()?.is_read_later ?? 0, 0);
   await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/items")),
     page.locator("#hide-read").evaluate((element) => {

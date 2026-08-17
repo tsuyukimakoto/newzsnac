@@ -19,6 +19,7 @@ export interface ArticleListItem {
   readonly canonicalUrl: string;
   readonly isRead: boolean;
   readonly isSaved: boolean;
+  readonly isReadLater: boolean;
   readonly interest: Interest;
   readonly priority: number | null;
   readonly estimatedReadingMinutes: number;
@@ -42,6 +43,7 @@ interface ArticleRow {
   canonical_url: string;
   is_read: number | null;
   is_saved: number | null;
+  is_read_later: number | null;
   interest: Interest;
   priority: number | null;
   estimated_reading_minutes: number | null;
@@ -87,7 +89,7 @@ function keyPointArray(value: string): readonly KeyPoint[] {
 function mapArticle(row: ArticleRow): ArticleListItem {
   return {
     id: row.id, title: row.title, canonicalUrl: row.canonical_url,
-    isRead: Boolean(row.is_read), isSaved: Boolean(row.is_saved), interest: row.interest, priority: row.priority,
+    isRead: Boolean(row.is_read), isSaved: Boolean(row.is_saved), isReadLater: Boolean(row.is_read_later), interest: row.interest, priority: row.priority,
     estimatedReadingMinutes: row.estimated_reading_minutes ?? 5,
     author: row.author, publishedAt: row.published_at,
     content: row.content,
@@ -123,9 +125,17 @@ export class ReadingService {
     this.upsertState(itemId, { isSaved: saved, savedAt: saved ? timestamp(now) : null });
   }
 
+  setReadLater(itemId: number, readLater: boolean, now = new Date()): void {
+    this.upsertState(itemId, {
+      ...(readLater ? { isRead: true, readAt: timestamp(now) } : {}),
+      isReadLater: readLater,
+      readLaterAt: readLater ? timestamp(now) : null,
+    });
+  }
+
   setInterest(itemId: number, interest: Interest): void { this.upsertState(itemId, { interest }); }
 
-  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean; processingState?: ProcessingState } = {}): readonly ArticleListItem[] {
+  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; readLater?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean; processingState?: ProcessingState } = {}): readonly ArticleListItem[] {
     const sort = options.sort ?? "newest";
     const order = {
       newest: "i.published_at DESC, i.id DESC",
@@ -133,11 +143,11 @@ export class ReadingService {
       source: "coalesce(min(s.display_name), ''), i.published_at DESC, i.id DESC",
       oldest: "i.published_at ASC, i.id ASC",
     }[sort];
-    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)", "(? = 0 OR coalesce(u.is_read, 0) = 0)", `${processingStateSql} = ?`];
+    const conditions = ["(? IS NULL OR i.discovered_at <= ?)", "(? IS NULL OR si.source_id = ?)", "(? = 0 OR coalesce(u.is_saved, 0) = 1)", "(? = 0 OR coalesce(u.is_read_later, 0) = 1)", "(? = 0 OR u.interest = 'interested')", "(? = 0 OR r.target_item_id IS NOT NULL)", "(? = 0 OR coalesce(u.is_read, 0) = 0)", `${processingStateSql} = ?`];
     const baseline = options.baselineAt?.toISOString() ?? null;
     const sourceId = options.sourceId ?? null;
     const rows = this.database.prepare(`
-      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved, u.interest,
+      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved, u.is_read_later, u.interest,
         max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
@@ -165,7 +175,7 @@ export class ReadingService {
       ORDER BY ${options.recommended ? "r.score DESC, i.published_at DESC, i.id DESC" : order}
     `).all(this.recommendationModel, this.embeddingInputVersion, this.recommendationSimilarityThreshold,
       baseline, baseline, sourceId, sourceId,
-      Number(options.saved ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false),
+      Number(options.saved ?? false), Number(options.readLater ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false),
       options.processingState ?? "ready") as unknown as ArticleRow[];
     const articles = rows.map(mapArticle);
     if (options.timeBudgetMinutes === undefined) return articles;
@@ -184,7 +194,7 @@ export class ReadingService {
         SELECT rowid
         FROM item_search WHERE item_search MATCH ?
       )
-      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved, u.interest,
+      SELECT i.id, i.title, i.canonical_url, u.is_read, u.is_saved, u.is_read_later, u.interest,
         max(a.priority) AS priority, i.estimated_reading_minutes, i.author, i.published_at,
         coalesce(i.extracted_content, i.feed_content) AS content,
         max(a.summary_ja) AS summary, max(a.labels_json) AS labels_json,
@@ -261,17 +271,20 @@ export class ReadingService {
   advanceFrom(itemId: number): void { this.setRead(itemId, true); }
   recordScrollOnly(_itemId: number): void { /* Scrolling alone intentionally changes no state. */ }
 
-  private upsertState(itemId: number, change: { isRead?: boolean; readAt?: string | null; isSaved?: boolean; savedAt?: string | null; interest?: Interest }): void {
+  private upsertState(itemId: number, change: { isRead?: boolean; readAt?: string | null; isSaved?: boolean; savedAt?: string | null; isReadLater?: boolean; readLaterAt?: string | null; interest?: Interest }): void {
     const existing = this.database.prepare("SELECT * FROM item_user_states WHERE item_id = ?").get(itemId);
     const now = timestamp();
     this.database.prepare(`
-      INSERT INTO item_user_states(item_id, is_read, is_saved, interest, read_at, saved_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO item_user_states(item_id, is_read, is_saved, is_read_later, interest, read_at, saved_at, read_later_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(item_id) DO UPDATE SET is_read=excluded.is_read, is_saved=excluded.is_saved,
-        interest=excluded.interest, read_at=excluded.read_at, saved_at=excluded.saved_at, updated_at=excluded.updated_at
+        is_read_later=excluded.is_read_later, interest=excluded.interest, read_at=excluded.read_at,
+        saved_at=excluded.saved_at, read_later_at=excluded.read_later_at, updated_at=excluded.updated_at
     `).run(itemId, Number(change.isRead ?? Boolean(existing?.is_read)), Number(change.isSaved ?? Boolean(existing?.is_saved)),
+      Number(change.isReadLater ?? Boolean(existing?.is_read_later)),
       change.interest === undefined ? existing?.interest ?? null : change.interest,
       change.readAt === undefined ? existing?.read_at ?? null : change.readAt,
-      change.savedAt === undefined ? existing?.saved_at ?? null : change.savedAt, now);
+      change.savedAt === undefined ? existing?.saved_at ?? null : change.savedAt,
+      change.readLaterAt === undefined ? existing?.read_later_at ?? null : change.readLaterAt, now);
   }
 }

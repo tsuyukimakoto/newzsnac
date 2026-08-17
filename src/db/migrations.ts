@@ -383,4 +383,15 @@ export const migrations: readonly Migration[] = [
         );
     `,
   },
+  {
+    version: 11,
+    name: "read_later_state",
+    sql: `
+      ALTER TABLE item_user_states ADD COLUMN is_read_later INTEGER NOT NULL DEFAULT 0
+        CHECK (is_read_later IN (0, 1));
+      ALTER TABLE item_user_states ADD COLUMN read_later_at TEXT;
+      CREATE INDEX item_user_states_read_later_idx
+        ON item_user_states(is_read_later, read_later_at DESC, item_id DESC);
+    `,
+  },
 ];

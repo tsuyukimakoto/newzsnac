@@ -35,6 +35,7 @@ export function createAppServer(
             : {
                 ...(requestUrl.searchParams.has("sourceId") ? { sourceId: Number(requestUrl.searchParams.get("sourceId")) } : {}),
                 ...(requestUrl.searchParams.get("saved") === "true" ? { saved: true } : {}),
+                ...(requestUrl.searchParams.get("readLater") === "true" ? { readLater: true } : {}),
                 ...(requestUrl.searchParams.get("interested") === "true" ? { interested: true } : {}),
                 ...(requestUrl.searchParams.get("recommended") === "true" ? { recommended: true } : {}),
                 ...(requestUrl.searchParams.get("unread") === "true" ? { unread: true } : {}),
@@ -53,7 +54,7 @@ export function createAppServer(
       ]) : [];
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify({
-        summary: summary?.ok ? summary.data : { total: 0, unread: 0, saved: 0, readingMinutes: 0 },
+        summary: summary?.ok ? summary.data : { total: 0, unread: 0, saved: 0, readLater: 0, readingMinutes: 0 },
         sources: sources?.ok ? sources.data : [],
         runtime: runtime?.ok ? runtime.data : { sqlite: "unavailable", lmStudio: "unavailable" },
       }));

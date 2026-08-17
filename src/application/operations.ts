@@ -13,7 +13,7 @@ import { ArticleRecoveryService } from "../collection/recovery.js";
 
 export const operationNames = [
   "source.resolve", "source.preview", "source.add", "source.pause", "source.resume",
-  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.interest", "article.translate", "article.retry", "article.analysis.retry",
+  "source.list", "candidate.list", "candidate.dismiss", "article.list", "article.search", "article.save", "article.read", "article.readLater", "article.readLaterBatch", "article.interest", "article.translate", "article.retry", "article.analysis.retry",
   "article.chat.list", "article.chat.ask", "article.chat.handoff",
   "dashboard.summary", "runtime.status",
 ] as const;
@@ -44,7 +44,7 @@ function integer(input: Record<string, unknown>, key: string): number {
 
 const mutatingOperations = new Set<OperationName>([
   "source.add", "source.pause", "source.resume", "candidate.dismiss",
-  "article.save", "article.read", "article.translate",
+  "article.save", "article.read", "article.readLater", "article.readLaterBatch", "article.translate",
   "article.interest",
   "article.retry",
   "article.analysis.retry",
@@ -107,6 +107,7 @@ export class ApplicationOperations {
       case "article.list": {
         const sourceId = optionalInteger(input, "sourceId");
         const saved = optionalBoolean(input, "saved");
+        const readLater = optionalBoolean(input, "readLater");
         const interested = optionalBoolean(input, "interested");
         const recommended = optionalBoolean(input, "recommended");
         const unread = optionalBoolean(input, "unread");
@@ -114,6 +115,7 @@ export class ApplicationOperations {
         return this.reading.list({
           ...(sourceId === undefined ? {} : { sourceId }),
           ...(saved === undefined ? {} : { saved }),
+          ...(readLater === undefined ? {} : { readLater }),
           ...(interested === undefined ? {} : { interested }),
           ...(recommended === undefined ? {} : { recommended }),
           ...(unread === undefined ? {} : { unread }),
@@ -135,6 +137,20 @@ export class ApplicationOperations {
       case "article.read": {
         const id = integer(input, "articleId"); const read = boolean(input, "read");
         return this.mutate(name, String(id), caller, () => { this.reading.setRead(id, read); return { articleId: id, read }; });
+      }
+      case "article.readLater": {
+        const id = integer(input, "articleId"); const readLater = boolean(input, "readLater");
+        return this.mutate(name, String(id), caller, () => { this.reading.setReadLater(id, readLater); return { articleId: id, readLater }; });
+      }
+      case "article.readLaterBatch": {
+        const articleIds = integerArray(input, "articleIds", 100);
+        const placeholders = articleIds.map(() => "?").join(",");
+        const count = Number(this.database.prepare(`SELECT count(*) AS count FROM items WHERE id IN (${placeholders})`).get(...articleIds)?.count ?? 0);
+        if (count !== articleIds.length) throw new Error("Every articleId must identify an existing article");
+        return this.mutate(name, articleIds.join(","), caller, () => {
+          for (const id of articleIds) this.reading.setReadLater(id, false);
+          return { articleIds, readLater: false };
+        });
       }
       case "article.interest": {
         const id = integer(input, "articleId"); const interested = boolean(input, "interested");
@@ -175,12 +191,13 @@ export class ApplicationOperations {
     }
   }
 
-  private dashboardSummary(): { total: number; unread: number; saved: number; interested: number; recommended: number; pending: number; failed: number; analysisFailed: number; readingMinutes: number } {
+  private dashboardSummary(): { total: number; unread: number; saved: number; readLater: number; interested: number; recommended: number; pending: number; failed: number; analysisFailed: number; readingMinutes: number } {
     const row = this.database.prepare(`
       SELECT
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') THEN 1 ELSE 0 END) AS total,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_read, 0) = 0 THEN 1 ELSE 0 END) AS unread,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_saved, 0) = 1 THEN 1 ELSE 0 END) AS saved,
+        sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND coalesce(u.is_read_later, 0) = 1 THEN 1 ELSE 0 END) AS read_later,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND u.interest = 'interested' THEN 1 ELSE 0 END) AS interested,
         sum(CASE WHEN i.extraction_status != 'failed' AND EXISTS(SELECT 1 FROM item_analyses a WHERE a.item_id=i.id AND a.kind='analysis') AND r.target_item_id IS NOT NULL AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL THEN 1 ELSE 0 END) AS recommended,
         sum(CASE WHEN i.extraction_status != 'failed'
@@ -203,6 +220,7 @@ export class ApplicationOperations {
       total: Number(row?.total ?? 0),
       unread: Number(row?.unread ?? 0),
       saved: Number(row?.saved ?? 0),
+      readLater: Number(row?.read_later ?? 0),
       interested: Number(row?.interested ?? 0),
       recommended: Number(row?.recommended ?? 0),
       pending: Number(row?.pending ?? 0),
@@ -297,6 +315,19 @@ function optionalInteger(input: Record<string, unknown>, key: string): number | 
   return integer(input, key);
 }
 
+function integerArray(input: Record<string, unknown>, key: string, maximumLength: number): number[] {
+  const value = input[key];
+  if (!Array.isArray(value) || value.length < 1 || value.length > maximumLength) {
+    throw new Error(`${key} must contain 1 through ${maximumLength} positive integers`);
+  }
+  const parsed = value.map((entry) => {
+    if (!Number.isSafeInteger(entry) || Number(entry) < 1) throw new Error(`${key} must contain positive integers`);
+    return Number(entry);
+  });
+  if (new Set(parsed).size !== parsed.length) throw new Error(`${key} must not contain duplicates`);
+  return parsed;
+}
+
 function optionalBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
   if (input[key] === undefined) return undefined;
   return boolean(input, key);
@@ -321,7 +352,7 @@ function settings(value: unknown): SourceSettings {
 function targetFor(operation: OperationName, rawInput: unknown): string {
   if (!rawInput || typeof rawInput !== "object") return "unknown";
   const input = rawInput as Record<string, unknown>;
-  return String(input.sourceId ?? input.candidateId ?? input.articleId ?? input.input ?? "unknown");
+  return String(input.sourceId ?? input.candidateId ?? input.articleId ?? input.articleIds ?? input.input ?? "unknown");
 }
 
 export function createApplicationOperations(database: DatabaseSync, config: AppConfig, fetcher: Fetch = globalThis.fetch): ApplicationOperations {

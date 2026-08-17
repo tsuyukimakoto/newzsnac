@@ -77,7 +77,8 @@ test("explicit interest incrementally creates and removes explainable recommenda
     reading.setInterest(1, "interested");
     recommendations.onInterestChanged(1, "interested");
     const worker = new EnrichmentWorker(database, client, "recommendation-test", recommendations);
-    while (await worker.runOne("qwen", "v1", new Date("2026-08-16T01:00:00Z"))) { /* drain */ }
+    const firstRunAt = new Date(Date.now() + 60_000);
+    while (await worker.runOne("qwen", "v1", firstRunAt)) { /* drain */ }
 
     const recommended = reading.list({ recommended: true });
     assert.deepEqual(recommended.map((item) => item.id), [2]);
@@ -91,7 +92,8 @@ test("explicit interest incrementally creates and removes explainable recommenda
     reading.setInterest(1, null);
     recommendations.onInterestChanged(1, null);
     assert.equal(database.prepare("SELECT count(*) AS count FROM item_recommendations").get()?.count, 0);
-    while (await worker.runOne("qwen", "v1", new Date("2026-08-16T02:00:00Z"))) { /* drain */ }
+    const secondRunAt = new Date(firstRunAt.getTime() + 60 * 60_000);
+    while (await worker.runOne("qwen", "v1", secondRunAt)) { /* drain */ }
     assert.equal(reading.list({ recommended: true }).length, 0);
     const source = reading.list().find((item) => item.id === 1);
     assert.equal(source?.isSaved, true);
@@ -144,7 +146,7 @@ test("embedding failures remain retryable without blocking interest updates", as
     recommendations.ensureEmbeddingQueued(1);
     const client = new LmStudioClient(config.lmStudioUrl, async () => { throw new Error("offline"); });
     await new EnrichmentWorker(database, client, "offline-embedding", recommendations)
-      .runOne("qwen", "v1", new Date("2026-08-16T00:00:00Z"));
+      .runOne("qwen", "v1", new Date(Date.now() + 60_000));
     assert.equal(database.prepare("SELECT status FROM jobs WHERE type = 'embedding'").get()?.status, "retry_wait");
     const reading = new ReadingService(database);
     reading.setInterest(1, "interested");

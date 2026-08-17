@@ -7,6 +7,7 @@ const state = {
   chats: new Map(),
   retrying: new Set(), retryErrors: new Map(),
   backHistory: [], forwardHistory: [],
+  readLaterSelection: new Set(), readLaterKnownIds: new Set(),
 };
 if (storedHideRead === null) localStorage.setItem("newzsnac.hideRead", "true");
 const list = document.querySelector("#article-list");
@@ -57,14 +58,41 @@ function renderList() {
   state.items.slice(state.start, state.end).forEach((item, offset) => {
     const index = state.start + offset;
     const card = document.createElement("div");
-    card.className = `article-card ${index === state.selected ? "selected" : ""} ${item.isRead ? "read" : ""} ${item.interest === "interested" ? "interested" : ""} ${item.recommendation ? "recommended" : ""}`;
+    card.className = `article-card ${index === state.selected ? "selected" : ""} ${item.isRead ? "read" : ""} ${state.filter.type === "readLater" ? "read-later-item" : ""} ${item.interest === "interested" ? "interested" : ""} ${item.recommendation ? "recommended" : ""}`;
     card.style.transform = `translateY(${index * ROW_HEIGHT}px)`;
     card.setAttribute("role", "option");
     card.setAttribute("aria-selected", String(index === state.selected));
-    card.innerHTML = `<div class="card-top"><span>${interestLabel(item)}${escapeHtml(item.source || "SOURCE")} · <time class="publication" datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(formatPublishedAt(item.publishedAt))}</time></span>${statusLabel(item)}</div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.summary || "要約を作成しています…")}</p>`;
+    const checkbox = state.filter.type === "readLater" && item.isReadLater
+      ? `<input class="read-later-check" type="checkbox" aria-label="${escapeHtml(item.title)}を一括原文確認の対象にする" ${state.readLaterSelection.has(item.id) ? "checked" : ""}>` : "";
+    const title = state.filter.type === "readLater" && item.isReadLater
+      ? `<h2><a class="article-title-link" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(item.title)}</a></h2>`
+      : `<h2>${escapeHtml(item.title)}</h2>`;
+    card.innerHTML = `<div class="card-top"><span>${interestLabel(item)}${escapeHtml(item.source || "SOURCE")} · <time class="publication" datetime="${escapeHtml(item.publishedAt || "")}">${escapeHtml(formatPublishedAt(item.publishedAt))}</time></span>${statusLabel(item)}</div><div class="article-title-row">${checkbox}${title}</div><p>${escapeHtml(item.summary || "要約を作成しています…")}</p>`;
+    const selection = card.querySelector(".read-later-check");
+    if (selection) {
+      selection.onclick = (event) => event.stopPropagation();
+      selection.onchange = () => {
+        if (selection.checked) state.readLaterSelection.add(item.id);
+        else state.readLaterSelection.delete(item.id);
+        updateReadLaterControls();
+      };
+    }
+    const titleLink = card.querySelector(".article-title-link");
+    if (titleLink) titleLink.onclick = (event) => event.stopPropagation();
     card.onclick = () => { void moveFocus(index); };
     list.append(card);
   });
+  updateReadLaterControls();
+}
+
+function updateReadLaterControls() {
+  const controls = document.querySelector("#read-later-actions");
+  const isReadLater = state.filter.type === "readLater";
+  controls.hidden = !isReadLater;
+  document.querySelector(".read-toggle").hidden = isReadLater;
+  const selectedCount = state.items.filter((item) => item.isReadLater && state.readLaterSelection.has(item.id)).length;
+  document.querySelector("#read-later-selection").textContent = `${selectedCount}件を選択`;
+  document.querySelector("#remove-read-later").disabled = selectedCount === 0;
 }
 
 function renderReader() {
@@ -319,7 +347,73 @@ function moveBackward() {
   showHistoryItem(target);
 }
 
+async function addCurrentToReadLater() {
+  if (state.navigating || state.filter.type === "readLater" || state.items.length === 0) return;
+  const current = state.items[state.selected];
+  const targetId = state.items[state.selected + 1]?.id ?? state.items[state.selected - 1]?.id ?? null;
+  if (!current) return;
+  state.navigating = true;
+  document.querySelector("#stream-error").textContent = "";
+  try {
+    await executeOperation("article.readLater", { articleId: current.id, readLater: true });
+    current.isReadLater = true;
+    current.isRead = true;
+    pushHistory(state.backHistory, current);
+    state.forwardHistory = [];
+    await loadDashboard();
+    if (state.hideRead) await loadItems(document.querySelector("#search").value.trim(), true, targetId);
+    else if (state.selected < state.items.length - 1) select(state.selected + 1);
+  } catch (error) {
+    current.isReadLater = false;
+    document.querySelector("#stream-error").textContent = `あとで読むに追加できませんでした: ${error.message}`;
+    renderList();
+  } finally {
+    state.navigating = false;
+  }
+}
+
+async function consumeReadLaterAndMoveForward() {
+  if (state.navigating || state.items.length === 0) return;
+  const current = state.items[state.selected];
+  if (!current) return;
+  const historyTarget = state.forwardHistory.at(-1);
+  const nextTarget = historyTarget || state.items[state.selected + 1] || null;
+  state.navigating = true;
+  document.querySelector("#stream-error").textContent = "";
+  try {
+    await executeOperation("article.readLater", { articleId: current.id, readLater: false });
+    current.isReadLater = false;
+    state.readLaterSelection.delete(current.id);
+    pushHistory(state.backHistory, current);
+    const currentIndex = state.items.findIndex((item) => item.id === current.id);
+    if (currentIndex >= 0) state.items.splice(currentIndex, 1);
+    if (historyTarget) {
+      state.forwardHistory.pop();
+      showHistoryItem(historyTarget);
+    } else if (nextTarget) {
+      const nextIndex = state.items.findIndex((item) => item.id === nextTarget.id);
+      select(nextIndex >= 0 ? nextIndex : 0);
+    } else {
+      state.selected = 0;
+      renderList();
+      renderReader();
+    }
+    document.querySelector("#empty").hidden = state.items.length > 0;
+    document.querySelector("#visible-count").textContent = `${state.items.filter((item) => item.isReadLater).length}件を表示`;
+    void loadDashboard();
+  } catch (error) {
+    document.querySelector("#stream-error").textContent = `あとで読むから除外できませんでした: ${error.message}`;
+    renderList();
+  } finally {
+    state.navigating = false;
+  }
+}
+
 async function moveForward() {
+  if (state.filter.type === "readLater") {
+    await consumeReadLaterAndMoveForward();
+    return;
+  }
   if (state.navigating || state.items.length === 0) return;
   const target = state.forwardHistory.at(-1);
   if (!target) {
@@ -380,9 +474,10 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
     if (["pending", "failed", "analysis_failed"].includes(state.filter.type)) url.searchParams.set("status", state.filter.type);
     if (!query && state.filter.type === "source") url.searchParams.set("sourceId", state.filter.id);
     if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
+    if (!query && state.filter.type === "readLater") url.searchParams.set("readLater", "true");
     if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
     if (!query && state.filter.type === "recommended") url.searchParams.set("recommended", "true");
-    if (state.hideRead) url.searchParams.set("unread", "true");
+    if (state.hideRead && state.filter.type !== "readLater") url.searchParams.set("unread", "true");
     const response = await fetch(url);
     const data = await response.json();
     if (generation !== state.loadGeneration) return;
@@ -390,16 +485,29 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
     const selectedId = preferredId ?? selectedItem?.id ?? null;
     const scrollTop = list.scrollTop;
     const refreshedItems = data.items || [];
-    if (preservePosition && state.hideRead) {
+    if (preservePosition && (state.hideRead || state.filter.type === "readLater")) {
       const historyIds = new Set([
         ...state.forwardHistory.map((item) => item.id),
         ...(selectedItem && preferredId === null ? [selectedItem.id] : []),
       ]);
       const refreshedIds = new Set(refreshedItems.map((item) => item.id));
-      const visibleHistory = state.items.filter((item) => item.isRead && historyIds.has(item.id) && !refreshedIds.has(item.id));
+      const visibleHistory = state.items.filter((item) => {
+        const hiddenByCurrentFilter = state.filter.type === "readLater" ? !item.isReadLater : item.isRead;
+        return hiddenByCurrentFilter && historyIds.has(item.id) && !refreshedIds.has(item.id);
+      });
       state.items = [...visibleHistory, ...refreshedItems];
     } else {
       state.items = refreshedItems;
+    }
+    if (state.filter.type === "readLater") {
+      const activeIds = new Set(refreshedItems.filter((item) => item.isReadLater).map((item) => item.id));
+      for (const id of activeIds) {
+        if (!state.readLaterKnownIds.has(id)) state.readLaterSelection.add(id);
+        state.readLaterKnownIds.add(id);
+      }
+      for (const id of [...state.readLaterSelection]) {
+        if (!activeIds.has(id)) state.readLaterSelection.delete(id);
+      }
     }
     const selectedIndex = selectedId ? state.items.findIndex((item) => item.id === selectedId) : -1;
     state.selected = selectedIndex >= 0 ? selectedIndex : 0;
@@ -419,6 +527,7 @@ const streamContexts = {
   pending: { kicker: "PROCESSING", title: "準備中", emptyTitle: "準備中の記事はありません", emptyDetail: "新しい記事を取得すると、分析が終わるまでここに表示されます。" },
   failed: { kicker: "RETRIEVAL", title: "取得失敗", emptyTitle: "取得に失敗した記事はありません", emptyDetail: "本文を取得できなかった記事だけがここに表示されます。" },
   analysis_failed: { kicker: "ANALYSIS", title: "分析失敗", emptyTitle: "分析に失敗した記事はありません", emptyDetail: "再試行上限に達した記事だけがここに表示されます。" },
+  readLater: { kicker: "READ LATER", title: "あとで読む", emptyTitle: "あとで読む記事はありません", emptyDetail: "通常のIndexで b を押すと、ここへ送れます。" },
 };
 
 function renderStreamContext() {
@@ -452,6 +561,7 @@ async function loadDashboard() {
   state.total = total;
   document.querySelector("#total-count").textContent = total;
   document.querySelector("#saved-count").textContent = summary.saved || 0;
+  document.querySelector("#read-later-count").textContent = summary.readLater || 0;
   document.querySelector("#interested-count").textContent = summary.interested || 0;
   document.querySelector("#recommended-count").textContent = summary.recommended || 0;
   document.querySelector("#pending-count").textContent = summary.pending || 0;
@@ -521,6 +631,28 @@ function showSourceManager() {
   document.querySelector("#source-input").focus();
 }
 
+async function removeReadLaterBatch() {
+  const articles = state.items.filter((item) => item.isReadLater && state.readLaterSelection.has(item.id));
+  const errorNode = document.querySelector("#stream-error");
+  if (articles.length === 0) {
+    errorNode.textContent = "一括で開く記事をチェックしてください。";
+    return;
+  }
+  errorNode.textContent = "";
+  const button = document.querySelector("#remove-read-later");
+  button.disabled = true;
+  try {
+    const articleIds = articles.map((article) => article.id);
+    await executeOperation("article.readLaterBatch", { articleIds });
+    for (const articleId of articleIds) state.readLaterSelection.delete(articleId);
+    await Promise.all([loadDashboard(), loadItems()]);
+  } catch (error) {
+    errorNode.textContent = `あとで読むから一括削除できませんでした: ${error.message}`;
+  } finally {
+    updateReadLaterControls();
+  }
+}
+
 list.addEventListener("scroll", () => requestAnimationFrame(renderList));
 function isTextEntryKey(event) {
   if (event.isComposing || event.key === "Process" || event.keyCode === 229) return true;
@@ -538,6 +670,8 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault(); void moveForward();
   } else if (event.key === "k") {
     event.preventDefault(); moveBackward();
+  } else if (event.key === "b" && item && state.filter.type !== "readLater") {
+    event.preventDefault(); void addCurrentToReadLater();
   } else if (event.code === "Space" && item?.processingState !== "failed") {
     event.preventDefault(); setMode(state.mode === "deep" ? "fast" : "deep"); renderReader();
   } else if (event.key === "/") {
@@ -568,6 +702,14 @@ document.querySelector("#filter-all").onclick = (event) => { state.filter = { ty
 document.querySelector("#filter-pending").onclick = (event) => { state.filter = { type: "pending" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-failed").onclick = (event) => { state.filter = { type: "failed" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-analysis_failed").onclick = (event) => { state.filter = { type: "analysis_failed" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
+document.querySelector("#filter-read-later").onclick = (event) => {
+  state.filter = { type: "readLater" };
+  state.view = "reader";
+  state.readLaterSelection = new Set();
+  state.readLaterKnownIds = new Set();
+  activateFilter(event.currentTarget);
+  loadItems();
+};
 document.querySelector("#filter-saved").onclick = (event) => { state.filter = { type: "saved" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-interested").onclick = (event) => { state.filter = { type: "interested" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
 document.querySelector("#filter-recommended").onclick = (event) => { state.filter = { type: "recommended" }; state.view = "reader"; activateFilter(event.currentTarget); loadItems(); };
@@ -578,6 +720,7 @@ hideRead.addEventListener("change", () => {
   void loadItems(document.querySelector("#search").value.trim(), true);
 });
 document.querySelector("#new-count").onclick = (event) => { event.currentTarget.hidden = true; state.view = "reader"; loadItems(); };
+document.querySelector("#remove-read-later").onclick = () => { void removeReadLaterBatch(); };
 document.querySelector(".discover").addEventListener("click", showSourceManager);
 new ResizeObserver(renderList).observe(list);
 await Promise.all([loadDashboard(), loadItems()]);

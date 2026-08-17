@@ -41,7 +41,7 @@ test("migration restores one analysis job per unanalysed article without reanaly
 
   const migrated = openDatabase(databasePath);
   context.after(() => migrated.close());
-  assert.equal(migrated.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 10);
+  assert.equal(migrated.prepare("SELECT count(*) AS count FROM schema_migrations").get()?.count, 11);
   assert.equal(migrated.prepare("SELECT count(*) AS count FROM jobs WHERE item_id=1 AND status IN ('pending','running','retry_wait')").get()?.count, 1);
   const restored = migrated.prepare("SELECT status, attempts, lease_owner, lease_expires_at, last_error FROM jobs WHERE item_id=1 ORDER BY id DESC LIMIT 1").get();
   assert.equal(restored?.status, "pending");

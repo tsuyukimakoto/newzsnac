@@ -59,6 +59,31 @@ test("scrolling alone stays unread while defined actions update state", () => {
   } finally { database.close(); }
 });
 
+test("read-later is independent from saved and marks added articles read", () => {
+  const database = openDatabase(":memory:");
+  try {
+    insertItem(database, 1, "2026-08-14T22:00:00Z", 4);
+    insertItem(database, 2, "2026-08-14T23:00:00Z", 6);
+    const reading = new ReadingService(database);
+
+    reading.setReadLater(1, true, new Date("2026-08-15T01:00:00Z"));
+    const queued = reading.list({ readLater: true });
+    assert.deepEqual(queued.map((item) => item.id), [1]);
+    assert.equal(queued[0]?.isReadLater, true);
+    assert.equal(queued[0]?.isRead, true);
+    assert.equal(queued[0]?.isSaved, false);
+    assert.equal(database.prepare("SELECT read_later_at FROM item_user_states WHERE item_id=1").get()?.read_later_at, "2026-08-15T01:00:00.000Z");
+
+    reading.setSaved(2, true);
+    assert.deepEqual(reading.list({ saved: true }).map((item) => item.id), [2]);
+    assert.deepEqual(reading.list({ readLater: true }).map((item) => item.id), [1]);
+
+    reading.setReadLater(1, false);
+    assert.deepEqual(reading.list({ readLater: true }), []);
+    assert.equal(reading.list().find((item) => item.id === 1)?.isRead, true);
+  } finally { database.close(); }
+});
+
 test("search, smart views, and time budgets work without LM Studio or external network", () => {
   const database = openDatabase(":memory:");
   try {
