@@ -35,7 +35,7 @@ for (const worker of ["collection", "analysis"] as const) {
       status: "ready",
       watch: false,
     });
-    if (worker === "collection") assert.equal(messages[1]?.status, "cycle-complete");
+    assert.equal(messages.length, 1);
   });
 }
 

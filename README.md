@@ -40,6 +40,15 @@ mise run start
 - 10秒ごとに登録済み情報源を確認する収集ワーカー
 - 2秒ごとに分析・翻訳ジョブを確認する分析ワーカー
 
+収集対象を確認したときと記事分析が完了したときは、起動したターミナルへ日時付きの運用ログを出力します。
+
+```text
+[08-23 10:00:00] INFO collection.complete sources=2 articles=12 new=4 failed=0 duration="1.23s"
+[08-23 10:00:09] INFO analysis.complete article=7 title="記事タイトル" duration="8.47s" tok/s=32.5 score=91
+```
+
+収集ログの`articles`は情報源で見つかった記事数、`new`はSQLiteへ初めて追加した記事数です。分析ログの`score`はLM Studioが返した0から100の読む優先度です。`tok/s`はLM Studioが生成速度を返した場合だけ表示されます。取得対象がない定期確認は表示しません。情報源の取得に失敗した場合は、情報源IDとエラー内容を`WARN`で表示します。
+
 別のターミナルから停止する場合は、同じプロジェクトのディレクトリで次を実行します。
 
 ```sh

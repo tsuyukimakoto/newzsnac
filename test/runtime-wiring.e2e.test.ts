@@ -38,6 +38,10 @@ test("runtime workers collect into SQLite, enqueue analysis, and persist LM resu
 
     const collection = await runCollectionCycle(database, config, fetcher);
     assert.equal(collection.collected, 1);
+    assert.equal(collection.sourcesChecked, 1);
+    assert.equal(collection.newArticles, 1);
+    assert.equal(collection.failedSources, 0);
+    assert.ok(collection.durationMs >= 0);
     assert.equal(database.prepare("SELECT extracted_content FROM items").get()?.extracted_content, "Extracted article body");
     assert.equal(database.prepare("SELECT status FROM jobs WHERE type='analysis'").get()?.status, "pending");
 

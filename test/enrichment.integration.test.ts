@@ -79,6 +79,48 @@ test("analysis logs successful token usage without article content", async () =>
   assert.doesNotMatch(JSON.stringify(telemetry), /Secret|private reasoning|ローカルAI/);
 });
 
+test("detailed analysis returns LM Studio generation speed only when valid", async () => {
+  for (const [speed, expected] of [[32.46, 32.46], ["fast", undefined], [-1, undefined], [undefined, undefined]] as const) {
+    const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => Response.json({
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify(valid) } }],
+      stats: { tokens_per_second: speed },
+    }));
+    const completion = await client.analyzeWithMetrics("qwen", "Title", "Body");
+    assert.deepEqual(completion.result, valid);
+    assert.equal(completion.metrics.tokensPerSecond, expected);
+  }
+});
+
+test("worker reports a completed article with total duration and does not report failures", async () => {
+  const database = openDatabase(":memory:");
+  try {
+    const itemId = addItem(database);
+    new EnrichmentService(database).enqueueAnalysis(itemId, 50, null, new Date("2026-08-15T00:00:00Z"));
+    const events: unknown[] = [];
+    const ticks = [100, 350];
+    const client = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => Response.json({
+      choices: [{ finish_reason: "stop", message: { content: JSON.stringify(valid) } }],
+      stats: { tokens_per_second: 25.25 },
+    }));
+    const worker = new EnrichmentWorker(database, client, "metrics", undefined, (event) => events.push(event), () => ticks.shift()!);
+    await worker.runOne("qwen", "v1", new Date("2026-08-15T00:00:00Z"));
+    assert.deepEqual(events, [{
+      articleId: itemId, title: "Local AI", durationMs: 250, priority: 82, tokensPerSecond: 25.25,
+    }]);
+
+    const failedId = Number(database.prepare(`
+      INSERT INTO items(canonical_url, title, discovered_at, feed_content, extraction_status, created_at, updated_at)
+      VALUES ('https://example.com/failure', 'Failure', ?, 'body', 'available', ?, ?)
+    `).run("2026-08-15T00:00:00.000Z", "2026-08-15T00:00:00.000Z", "2026-08-15T00:00:00.000Z").lastInsertRowid);
+    new EnrichmentService(database).enqueueAnalysis(failedId, 50, null, new Date("2026-08-15T00:00:00Z"));
+    const failingClient = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => { throw new Error("offline"); });
+    const failedEvents: unknown[] = [];
+    await new EnrichmentWorker(database, failingClient, "failed-metrics", undefined, (event) => failedEvents.push(event))
+      .runOne("qwen", "v1", new Date("2026-08-15T00:00:00Z"));
+    assert.deepEqual(failedEvents, []);
+  } finally { database.close(); }
+});
+
 test("analysis telemetry logger is disabled by default and writes one JSON line when enabled", () => {
   const lines: string[] = [];
   assert.equal(createAnalysisLogger(false, (line) => lines.push(line)), undefined);

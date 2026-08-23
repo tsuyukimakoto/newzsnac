@@ -81,7 +81,13 @@ test("normalization merges canonical URLs while preserving sources and offline c
       externalId: "2", url: "https://example.com/story", title: "Shared story",
     });
     assert.equal(firstItem, secondItem);
-    assert.equal(database.prepare("SELECT count(*) AS count FROM source_items").get()?.count, 2);
+    assert.deepEqual(repository.saveWithStatus(secondSource, {
+      externalId: "2", url: "https://example.com/story", title: "Shared story",
+    }), { itemId: firstItem, created: false });
+    assert.deepEqual(repository.saveWithStatus(firstSource, {
+      externalId: "3", url: "https://example.com/new-story", title: "New story",
+    }), { itemId: firstItem + 1, created: true });
+    assert.equal(database.prepare("SELECT count(*) AS count FROM source_items").get()?.count, 3);
     assert.equal(database.prepare("SELECT feed_content FROM items WHERE id = ?").get(firstItem)?.feed_content, "offline body");
     assert.equal(normalizeUrl("https://example.com/a?gclid=x#b"), "https://example.com/a");
     assert.ok(titleSimilarity("SQLite local reader", "A local SQLite reader") > 0.5);
