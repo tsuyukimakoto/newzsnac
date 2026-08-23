@@ -33,6 +33,12 @@ export interface EmbeddingInput {
   readonly hash: string;
 }
 
+export interface RecommendationCalculation {
+  readonly targetItemId: number;
+  readonly sourceItemId: number;
+  readonly score: number;
+}
+
 export function buildEmbeddingInput(
   article: { readonly title: string; readonly summary?: string | null; readonly content?: string | null },
   maximumCharacters: number,
@@ -145,12 +151,15 @@ export class RecommendationService {
     return this.processEmbedding(job, client, now);
   }
 
-  processRecommendationJob(job: Job, now = new Date()): void {
+  processRecommendationJob(job: Job, now = new Date()): readonly RecommendationCalculation[] {
     const payload = job.payload as { sourceItemId?: number; targetItemId?: number; recalculateAll?: boolean };
-    if (payload.sourceItemId) this.recalculateFromSource(payload.sourceItemId, now);
-    else if (payload.targetItemId) this.recalculateTarget(payload.targetItemId, now);
-    else if (payload.recalculateAll) this.recalculateAll(now);
-    else throw new Error("Recommendation job payload is invalid");
+    if (payload.sourceItemId) return this.recalculateFromSource(payload.sourceItemId, now);
+    if (payload.targetItemId) {
+      const result = this.recalculateTarget(payload.targetItemId, now);
+      return result ? [result] : [];
+    }
+    if (payload.recalculateAll) return this.recalculateAll(now);
+    throw new Error("Recommendation job payload is invalid");
   }
 
   private async processEmbedding(job: Job, client: LmStudioClient, now: Date): Promise<void> {
@@ -231,31 +240,41 @@ export class RecommendationService {
       .all().map((row) => Number(row.item_id));
   }
 
-  private recalculateAll(now: Date): void {
-    for (const targetId of this.eligibleTargetIds()) this.recalculateTarget(targetId, now);
+  private recalculateAll(now: Date): readonly RecommendationCalculation[] {
+    const calculations: RecommendationCalculation[] = [];
+    for (const targetId of this.eligibleTargetIds()) {
+      const result = this.recalculateTarget(targetId, now);
+      if (result) calculations.push(result);
+    }
     this.database.prepare(`
       DELETE FROM item_recommendations WHERE target_item_id IN (
         SELECT i.id FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
         WHERE coalesce(u.is_read, 0) = 1 OR u.interest IS NOT NULL
       )
     `).run();
+    return calculations;
   }
 
-  private recalculateFromSource(sourceId: number, now: Date): void {
+  private recalculateFromSource(sourceId: number, now: Date): readonly RecommendationCalculation[] {
     const state = this.database.prepare("SELECT interest FROM item_user_states WHERE item_id = ?").get(sourceId);
-    if (state?.interest !== "interested") return;
-    for (const targetId of this.eligibleTargetIds()) this.recalculateTarget(targetId, now);
+    if (state?.interest !== "interested") return [];
+    const calculations: RecommendationCalculation[] = [];
+    for (const targetId of this.eligibleTargetIds()) {
+      const result = this.recalculateTarget(targetId, now);
+      if (result) calculations.push(result);
+    }
+    return calculations;
   }
 
-  private recalculateTarget(targetId: number, now: Date): void {
-    if (!this.config.embeddingModel) return;
+  private recalculateTarget(targetId: number, now: Date): RecommendationCalculation | null {
+    if (!this.config.embeddingModel) return null;
     const eligible = this.database.prepare(`
       SELECT 1 FROM items i LEFT JOIN item_user_states u ON u.item_id = i.id
       WHERE i.id = ? AND coalesce(u.is_read, 0) = 0 AND u.interest IS NULL
     `).get(targetId);
-    if (!eligible) { this.database.prepare("DELETE FROM item_recommendations WHERE target_item_id = ?").run(targetId); return; }
+    if (!eligible) { this.database.prepare("DELETE FROM item_recommendations WHERE target_item_id = ?").run(targetId); return null; }
     const target = this.embedding(targetId);
-    if (!target) return;
+    if (!target) return null;
     let best: { sourceId: number; score: number } | null = null;
     for (const sourceId of this.interestedIds()) {
       const source = this.embedding(sourceId);
@@ -265,7 +284,7 @@ export class RecommendationService {
     }
     if (!best) {
       this.database.prepare("DELETE FROM item_recommendations WHERE target_item_id = ?").run(targetId);
-      return;
+      return null;
     }
     this.database.prepare(`
       INSERT INTO item_recommendations(target_item_id, source_item_id, score, model_id, input_version, calculated_at)
@@ -273,5 +292,6 @@ export class RecommendationService {
       ON CONFLICT(target_item_id) DO UPDATE SET source_item_id=excluded.source_item_id, score=excluded.score,
         model_id=excluded.model_id, input_version=excluded.input_version, calculated_at=excluded.calculated_at
     `).run(targetId, best.sourceId, best.score, this.config.embeddingModel, this.config.embeddingInputVersion, now.toISOString());
+    return { targetItemId: targetId, sourceItemId: best.sourceId, score: best.score };
   }
 }

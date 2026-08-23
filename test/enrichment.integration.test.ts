@@ -102,7 +102,9 @@ test("worker reports a completed article with total duration and does not report
       choices: [{ finish_reason: "stop", message: { content: JSON.stringify(valid) } }],
       stats: { tokens_per_second: 25.25 },
     }));
-    const worker = new EnrichmentWorker(database, client, "metrics", undefined, (event) => events.push(event), () => ticks.shift()!);
+    const worker = new EnrichmentWorker(database, client, "metrics", undefined, {
+      analysisCompleted: (event) => events.push(event),
+    }, () => ticks.shift()!);
     await worker.runOne("qwen", "v1", new Date("2026-08-15T00:00:00Z"));
     assert.deepEqual(events, [{
       articleId: itemId, title: "Local AI", durationMs: 250, priority: 82, tokensPerSecond: 25.25,
@@ -115,28 +117,37 @@ test("worker reports a completed article with total duration and does not report
     new EnrichmentService(database).enqueueAnalysis(failedId, 50, null, new Date("2026-08-15T00:00:00Z"));
     const failingClient = new LmStudioClient(new URL("http://127.0.0.1:1234/v1"), async () => { throw new Error("offline"); });
     const failedEvents: unknown[] = [];
-    await new EnrichmentWorker(database, failingClient, "failed-metrics", undefined, (event) => failedEvents.push(event))
+    const jobFailures: unknown[] = [];
+    await new EnrichmentWorker(database, failingClient, "failed-metrics", undefined, {
+      analysisCompleted: (event) => failedEvents.push(event),
+      jobFailed: (event) => jobFailures.push(event),
+    })
       .runOne("qwen", "v1", new Date("2026-08-15T00:00:00Z"));
     assert.deepEqual(failedEvents, []);
+    assert.deepEqual(jobFailures, [{
+      jobType: "analysis", jobId: 2, articleId: failedId, attempt: 1, maxAttempts: 5,
+      error: "offline", retrying: true,
+    }]);
   } finally { database.close(); }
 });
 
-test("analysis telemetry logger is disabled by default and writes one JSON line when enabled", () => {
-  const lines: string[] = [];
-  assert.equal(createAnalysisLogger(false, (line) => lines.push(line)), undefined);
-  const logger = createAnalysisLogger(true, (line) => lines.push(line));
+test("analysis telemetry logger is disabled by default and uses DEBUG when enabled", () => {
+  const events: Array<{ event: string; fields?: unknown }> = [];
+  const operationalLogger = { debug: (event: string, fields?: unknown) => { events.push({ event, fields }); } };
+  assert.equal(createAnalysisLogger(false, operationalLogger), undefined);
+  const logger = createAnalysisLogger(true, operationalLogger);
   assert.ok(logger);
   logger({
     service: "analysis-worker", event: "analysis-completion", effort: "medium", maxOutputTokens: 8_096,
     finishReason: "stop", promptTokens: 100, completionTokens: 200, reasoningTokens: 50,
     contentCharacters: 300, durationMs: 400, validation: "succeeded",
   });
-  assert.equal(lines.length, 1);
-  assert.deepEqual(JSON.parse(lines[0]!), {
-    service: "analysis-worker", event: "analysis-completion", effort: "medium", maxOutputTokens: 8_096,
+  assert.deepEqual(events, [{ event: "analysis.telemetry", fields: {
+    effort: "medium", maxOutputTokens: 8_096,
     finishReason: "stop", promptTokens: 100, completionTokens: 200, reasoningTokens: 50,
     contentCharacters: 300, durationMs: 400, validation: "succeeded",
-  });
+    tokensPerSecond: undefined, failure: undefined,
+  } }]);
 });
 
 test("analysis deterministically keeps the beginning and end within its character limit", async () => {

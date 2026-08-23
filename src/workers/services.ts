@@ -5,10 +5,11 @@ import { extractArticle, ItemRepository } from "../collection/normalize.js";
 import type { CollectedItem } from "../collection/types.js";
 import type { AppConfig } from "../config.js";
 import { LmStudioClient, type AnalysisLogger } from "../enrichment/client.js";
-import { EnrichmentService, EnrichmentWorker, type ArticleAnalysisCompletedLogger } from "../enrichment/service.js";
+import { EnrichmentService, EnrichmentWorker, type EnrichmentWorkerObservers } from "../enrichment/service.js";
 import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
 import type { Fetch } from "../sources/resolver.js";
 import { RecommendationService } from "../recommendation/service.js";
+import type { OperationalLogger } from "../logging.js";
 
 interface SourceSettingsRow {
   base_priority: number;
@@ -81,8 +82,9 @@ export async function runAnalysisCycle(
   config: AppConfig,
   fetcher: Fetch = globalThis.fetch,
   maxJobs = 25,
-  analysisCompletedLogger: ArticleAnalysisCompletedLogger = () => {},
+  observers: EnrichmentWorkerObservers = {},
   nowMilliseconds = Date.now,
+  analysisLogger?: AnalysisLogger,
 ): Promise<{ readonly processed: number }> {
   let modelId = config.lmStudioModel;
   try {
@@ -97,11 +99,11 @@ export async function runAnalysisCycle(
       fetcher,
       config.analysisMaxCharacters,
       config.lmStudioReasoningEffort,
-      createAnalysisLogger(config.analysisTelemetryEnabled),
+      analysisLogger,
     ),
     `analysis-${process.pid}`,
     new RecommendationService(database, config),
-    analysisCompletedLogger,
+    observers,
     nowMilliseconds,
   );
   new RecommendationService(database, config).enqueueMissingEmbeddings(maxJobs);
@@ -114,8 +116,20 @@ export async function runAnalysisCycle(
 
 export function createAnalysisLogger(
   enabled: boolean,
-  writer: (line: string) => unknown = (line) => process.stdout.write(line),
+  logger: Pick<OperationalLogger, "debug">,
 ): AnalysisLogger | undefined {
   if (!enabled) return undefined;
-  return (event) => writer(`${JSON.stringify(event)}\n`);
+  return (event) => logger.debug("analysis.telemetry", {
+    effort: event.effort,
+    maxOutputTokens: event.maxOutputTokens,
+    finishReason: event.finishReason,
+    promptTokens: event.promptTokens,
+    completionTokens: event.completionTokens,
+    reasoningTokens: event.reasoningTokens,
+    contentCharacters: event.contentCharacters,
+    durationMs: event.durationMs,
+    tokensPerSecond: event.tokensPerSecond,
+    validation: event.validation,
+    failure: event.failure,
+  });
 }

@@ -10,10 +10,10 @@ import { test } from "node:test";
 const distRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = resolve(distRoot, "src");
 
-function run(entrypoint: string, args: readonly string[] = []) {
+function run(entrypoint: string, args: readonly string[] = [], environment: Readonly<Record<string, string>> = {}) {
   return spawnSync(process.execPath, [resolve(sourceRoot, entrypoint), ...args], {
     encoding: "utf8",
-    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: ":memory:" },
+    env: { ...process.env, NEWSZNAC_PORT: "0", NEWSZNAC_DATABASE_PATH: ":memory:", ...environment },
   });
 }
 
@@ -24,17 +24,26 @@ test("CLI starts and returns structured health output", () => {
   assert.deepEqual(JSON.parse(result.stdout), { service: "cli", status: "ok" });
 });
 
+test("CLI JSON output is not suppressed by the application log level", () => {
+  const result = run("cli.js", ["health"], { NEWSZNAC_LOG_LEVEL: "error" });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { service: "cli", status: "ok" });
+});
+
+test("caught startup failures use the common ERROR logger", () => {
+  const result = run("server.js", [], { NEWSZNAC_HOST: "0.0.0.0", NEWSZNAC_LOG_LEVEL: "error" });
+  assert.equal(result.status, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /^\[\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ERROR web\.start-failed error="NEWSZNAC_HOST must be a loopback address"\n$/);
+});
+
 for (const worker of ["collection", "analysis"] as const) {
   test(`${worker} worker starts`, () => {
     const result = run(`workers/${worker}.js`);
 
     assert.equal(result.status, 0, result.stderr);
-    const messages = result.stdout.trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-    assert.deepEqual(messages[0], {
-      service: `${worker}-worker`,
-      status: "ready",
-      watch: false,
-    });
+    const messages = result.stdout.trim().split("\n");
+    assert.match(messages[0]!, new RegExp(`^\\[\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}\\] INFO ${worker}\\.ready watch=false$`));
     assert.equal(messages.length, 1);
   });
 }
@@ -52,12 +61,7 @@ test("web application starts on loopback and reports readiness", async (context)
       throw new Error(`web process exited before readiness (code ${String(code)})`);
     }),
   ])) as [Buffer];
-  const message = JSON.parse(chunk.toString()) as Record<string, unknown>;
-
-  assert.equal(message.service, "web");
-  assert.equal(message.status, "ready");
-  assert.equal(message.host, "127.0.0.1");
-  assert.equal(typeof message.port, "number");
+  assert.match(chunk.toString(), /INFO web\.ready host="127\.0\.0\.1" port=\d+/);
 });
 
 test("normal start supervises web, collection, and analysis processes on one SQLite file", async (context) => {
@@ -83,7 +87,7 @@ test("normal start supervises web, collection, and analysis processes on one SQL
   child.stdout.on("data", (chunk: string) => { output += chunk; });
   child.stderr.on("data", (chunk: string) => { errorOutput += chunk; });
   const deadline = Date.now() + 10_000;
-  while (!(output.includes('"service":"web"') && output.includes('"service":"collection-worker"') && output.includes('"service":"analysis-worker"'))) {
+  while (!(output.includes("INFO web.ready") && output.includes("INFO collection.ready") && output.includes("INFO analysis.ready"))) {
     if (child.exitCode !== null) throw new Error(`supervisor exited with ${child.exitCode}: ${errorOutput}`);
     if (Date.now() >= deadline) throw new Error(`services were not all ready: ${output}\n${errorOutput}`);
     await new Promise((resolveDelay) => setTimeout(resolveDelay, 20));

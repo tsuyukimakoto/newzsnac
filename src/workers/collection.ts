@@ -1,17 +1,25 @@
 import { loadConfig, type AppConfig } from "../config.js";
 import { openDatabase } from "../db/database.js";
 import { runCollectionCycle } from "./services.js";
-import { createOperationalLogger, formatDuration, type OperationalLogger } from "../logging.js";
+import { createOperationalLogger, errorMessage, formatDuration, type OperationalLogger } from "../logging.js";
 
 const WATCH_INTERVAL_MS = 10_000;
 
-export async function startCollectionWorker(config: AppConfig, watch = false): Promise<void> {
+export async function startCollectionWorker(
+  config: AppConfig,
+  watch = false,
+  logger: OperationalLogger = createOperationalLogger({ minimumLevel: config.logLevel }),
+): Promise<void> {
   const database = openDatabase(config.databasePath);
-  const logger = createOperationalLogger();
-  process.stdout.write(`${JSON.stringify({ service: "collection-worker", status: "ready", watch })}\n`);
+  logger.info("collection.ready", { watch });
   try {
     do {
       const result = await runCollectionCycle(database, config);
+      logger.debug("collection.poll", {
+        sources: result.sourcesChecked,
+        articles: result.collected,
+        duration: formatDuration(result.durationMs),
+      });
       logCollectionCycle(logger, result);
       if (watch) await delay(WATCH_INTERVAL_MS);
     } while (watch);
@@ -39,8 +47,16 @@ function delay(milliseconds: number): Promise<void> {
 }
 
 if (import.meta.filename === process.argv[1]) {
-  startCollectionWorker(loadConfig(), process.argv.includes("--watch")).catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.stack : String(error)}\n`);
+  let logger = createOperationalLogger();
+  try {
+    const config = loadConfig();
+    logger = createOperationalLogger({ minimumLevel: config.logLevel });
+    startCollectionWorker(config, process.argv.includes("--watch"), logger).catch((error) => {
+      logger.error("collection.fatal", { error: errorMessage(error) });
+      process.exitCode = 1;
+    });
+  } catch (error) {
+    logger.error("collection.start-failed", { error: errorMessage(error) });
     process.exitCode = 1;
-  });
+  }
 }

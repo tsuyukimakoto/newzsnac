@@ -40,14 +40,23 @@ mise run start
 - 10秒ごとに登録済み情報源を確認する収集ワーカー
 - 2秒ごとに分析・翻訳ジョブを確認する分析ワーカー
 
-収集対象を確認したときと記事分析が完了したときは、起動したターミナルへ日時付きの運用ログを出力します。
+起動完了、収集、記事分析、推薦など、アプリケーションの動作を把握できる出来事は、起動したターミナルへ日時付きのINFOログとして出力します。
 
 ```text
 [08-23 10:00:00] INFO collection.complete sources=2 articles=12 new=4 failed=0 duration="1.23s"
-[08-23 10:00:09] INFO analysis.complete article=7 title="記事タイトル" duration="8.47s" tok/s=32.5 score=91
+[08-23 10:00:09] INFO analysis.complete article=7 title="記事タイトル" duration="8.47s" tok/s=32.5 priority=91
+[08-23 10:00:10] INFO recommendation.complete article=7 source=3 duration="2ms" score=0.923
 ```
 
-収集ログの`articles`は情報源で見つかった記事数、`new`はSQLiteへ初めて追加した記事数です。分析ログの`score`はLM Studioが返した0から100の読む優先度です。`tok/s`はLM Studioが生成速度を返した場合だけ表示されます。取得対象がない定期確認は表示しません。情報源の取得に失敗した場合は、情報源IDとエラー内容を`WARN`で表示します。
+収集ログの`articles`は情報源で見つかった記事数、`new`はSQLiteへ初めて追加した記事数です。分析ログの`priority`はLM Studioが返した0から100の読む優先度です。`tok/s`はLM Studioが生成速度を返した場合だけ表示されます。推薦ログの`article`は対象記事、`source`は根拠になった「気になった」記事、`score`は-1から1の類似度です。推薦表示の閾値未満でも、計算して保存したスコアはログに出力します。初期設定では処理対象がない定期確認は表示しません。情報源の取得失敗は`WARN`、ジョブやサービスの失敗は`ERROR`で表示します。
+
+ログは`DEBUG < INFO < WARN < ERROR`の順で、`NEWSZNAC_LOG_LEVEL`に指定したレベル以上だけを表示します。初期値は`info`です。定期ポーリングを件数と所要時間付きで確認する場合は、次のように起動します。
+
+```sh
+NEWSZNAC_LOG_LEVEL=debug mise run start
+```
+
+`DEBUG`と`INFO`は標準出力、`WARN`と`ERROR`は標準エラー出力です。すべてを一つのファイルへ保存する場合は`mise run start > newzsnac.log 2>&1`のように両方をリダイレクトします。CLI、停止コマンド、HTTP APIが返すJSONはログではないため、この設定では抑制されません。
 
 別のターミナルから停止する場合は、同じプロジェクトのディレクトリで次を実行します。
 
@@ -136,6 +145,7 @@ NEWSZNAC_LM_STUDIO_URL=http://127.0.0.1:1234/v1
 NEWSZNAC_LM_STUDIO_MODEL=qwen/qwen3.8-27b
 NEWSZNAC_LM_STUDIO_REASONING_EFFORT=medium
 NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED=false
+NEWSZNAC_LOG_LEVEL=info
 NEWSZNAC_ANALYSIS_MAX_CHARACTERS=12000
 NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 ```
@@ -150,6 +160,7 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 | `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析、翻訳、記事問答に使うモデルID |
 | `NEWSZNAC_LM_STUDIO_REASONING_EFFORT` | `medium` | 記事分析、全文翻訳、記事問答の推論量。`none`、`low`、`medium`、`high` |
 | `NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED` | `false` | 記事分析の利用量を標準出力へ記録するか。`true`または`false` |
+| `NEWSZNAC_LOG_LEVEL` | `info` | 最小ログレベル。`debug`、`info`、`warn`、`error` |
 | `NEWSZNAC_ANALYSIS_MAX_CHARACTERS` | `12000` | 分析時にLM Studioへ渡す記事本文の最大文字数。超過時は冒頭と末尾を保持 |
 | `NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS` | `24000` | 記事問答でLM Studioへ渡す文脈の最大文字数 |
 | `NEWSZNAC_EMBEDDING_MODEL` | 未設定 | 記事ベクトルに使うLM Studioの埋め込みモデルID |
@@ -161,7 +172,7 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 
 `NEWSZNAC_LM_STUDIO_REASONING_EFFORT`はLM Studioのモデルロード設定ではなく、Newzsnacが記事分析、全文翻訳、記事問答の各リクエストへ指定する値です。記事分析の最大出力は8,096トークンです。
 
-`NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED=true`にすると、分析ワーカーは終了理由、入力・出力・推論トークン数、最終回答の文字数、処理時間、検証結果を1分析につき一行の`analysis-completion`ログとして標準出力へ記録します。既定では出力しません。ログに記事タイトル、URL、本文、生成内容は含みません。ロード中のモデルが選択したreasoning effortに対応していない場合は、LM Studioから返されたエラーを表示またはジョブへ記録します。
+`NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED=true`かつ`NEWSZNAC_LOG_LEVEL=debug`にすると、分析ワーカーは終了理由、入力・出力・推論トークン数、最終回答の文字数、処理時間、検証結果を1分析につき一行の`analysis.telemetry`ログとして標準出力へ記録します。既定では出力しません。ログに記事タイトル、URL、本文、生成内容は含みません。ロード中のモデルが選択したreasoning effortに対応していない場合は、LM Studioから返されたエラーを表示またはジョブへ記録します。
 
 Web、収集、分析を個別に起動する場合は、次のコマンドを使います。
 
