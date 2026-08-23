@@ -3,6 +3,39 @@ import { JobQueue } from "../db/jobs.js";
 import { LmStudioClient } from "./client.js";
 import type { RecommendationService } from "../recommendation/service.js";
 
+export interface ArticleAnalysisCompletedEvent {
+  readonly articleId: number;
+  readonly title: string;
+  readonly durationMs: number;
+  readonly priority: number;
+  readonly tokensPerSecond?: number;
+}
+
+export type ArticleAnalysisCompletedLogger = (event: ArticleAnalysisCompletedEvent) => void;
+
+export interface RecommendationCompletedEvent {
+  readonly articleId: number;
+  readonly sourceArticleId: number;
+  readonly durationMs: number;
+  readonly score: number;
+}
+
+export interface EnrichmentWorkerObservers {
+  readonly analysisCompleted?: ArticleAnalysisCompletedLogger;
+  readonly recommendationCompleted?: (event: RecommendationCompletedEvent) => void;
+  readonly jobFailed?: (event: JobFailedEvent) => void;
+}
+
+export interface JobFailedEvent {
+  readonly jobType: string;
+  readonly jobId: number;
+  readonly articleId: number | null;
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly error: string;
+  readonly retrying: boolean;
+}
+
 export function deterministicPreScore(basePriority: number, publishedAt: string | null, now = new Date()): number {
   const ageHours = publishedAt ? Math.max(0, (now.getTime() - Date.parse(publishedAt)) / 3_600_000) : 168;
   const recency = Math.max(0, 30 - Math.floor(ageHours / 8));
@@ -86,11 +119,15 @@ export class EnrichmentWorker {
     private readonly client: LmStudioClient,
     private readonly owner: string,
     private readonly recommendations?: RecommendationService,
+    private readonly observers: EnrichmentWorkerObservers = {},
+    private readonly nowMilliseconds: () => number = Date.now,
   ) { this.queue = new JobQueue(database); }
 
   async runOne(modelId: string, promptVersion: string, now = new Date()): Promise<boolean> {
     const job = this.queue.claim(this.owner, 5 * 60_000, now);
     if (!job) return false;
+    const startedAt = this.nowMilliseconds();
+    let analysisCompleted: Omit<ArticleAnalysisCompletedEvent, "durationMs"> | undefined;
     try {
       if (job.type === "embedding") {
         if (!this.recommendations) throw new Error("Recommendation service is unavailable");
@@ -100,14 +137,30 @@ export class EnrichmentWorker {
       }
       if (job.type === "recommendation") {
         if (!this.recommendations) throw new Error("Recommendation service is unavailable");
-        this.recommendations.processRecommendationJob(job, now);
-        this.queue.complete(job.id, this.owner, now);
+        const calculations = this.recommendations.processRecommendationJob(job, now);
+        const completed = this.queue.complete(job.id, this.owner, now);
+        if (completed && this.observers.recommendationCompleted) {
+          const durationMs = Math.max(0, Math.round(this.nowMilliseconds() - startedAt));
+          for (const calculation of calculations) {
+            try {
+              this.observers.recommendationCompleted({
+                articleId: calculation.targetItemId,
+                sourceArticleId: calculation.sourceItemId,
+                durationMs,
+                score: calculation.score,
+              });
+            } catch {
+              // Operational logging must not change job completion behavior.
+            }
+          }
+        }
         return true;
       }
       const item = this.database.prepare("SELECT title, coalesce(extracted_content, feed_content) AS content FROM items WHERE id = ?").get(job.itemId);
       if (!item?.content) throw new Error("Item content is unavailable");
       if (job.type === "analysis") {
-        const result = await this.client.analyze(modelId, String(item.title), String(item.content));
+        const completion = await this.client.analyzeWithMetrics(modelId, String(item.title), String(item.content));
+        const result = completion.result;
         this.database.prepare(`
           INSERT INTO item_analyses(item_id, kind, model_id, prompt_version, summary_ja,
             labels_json, priority, key_points_json, item_type, original_language, analyzed_at)
@@ -119,6 +172,12 @@ export class EnrichmentWorker {
         `).run(job.itemId, modelId, promptVersion, result.summaryJa, JSON.stringify(result.labels), result.priority,
           JSON.stringify(result.keyPoints), result.itemType, result.originalLanguage, now.toISOString());
         this.recommendations?.ensureEmbeddingQueued(job.itemId!);
+        analysisCompleted = {
+          articleId: job.itemId!,
+          title: String(item.title),
+          priority: result.priority,
+          ...(completion.metrics.tokensPerSecond === undefined ? {} : { tokensPerSecond: completion.metrics.tokensPerSecond }),
+        };
       } else if (job.type === "translation") {
         const payload = job.payload as { modelId?: string; promptVersion?: string };
         const actualModel = payload.modelId ?? modelId; const actualPrompt = payload.promptVersion ?? promptVersion;
@@ -131,10 +190,36 @@ export class EnrichmentWorker {
       } else {
         throw new Error(`Unsupported enrichment job: ${job.type}`);
       }
-      this.queue.complete(job.id, this.owner, now);
+      const completed = this.queue.complete(job.id, this.owner, now);
+      if (completed && analysisCompleted && this.observers.analysisCompleted) {
+        try {
+          this.observers.analysisCompleted({
+            ...analysisCompleted,
+            durationMs: Math.max(0, Math.round(this.nowMilliseconds() - startedAt)),
+          });
+        } catch {
+          // Operational logging must not change job completion behavior.
+        }
+      }
     } catch (error) {
       const delay = Math.min(3_600_000, 2 ** job.attempts * 30_000);
-      this.queue.retry(job.id, this.owner, error instanceof Error ? error.message : String(error), new Date(now.getTime() + delay), now);
+      const message = error instanceof Error ? error.message : String(error);
+      const retried = this.queue.retry(job.id, this.owner, message, new Date(now.getTime() + delay), now);
+      if (retried && this.observers.jobFailed) {
+        try {
+          this.observers.jobFailed({
+            jobType: job.type,
+            jobId: job.id,
+            articleId: job.itemId,
+            attempt: job.attempts,
+            maxAttempts: job.maxAttempts,
+            error: message,
+            retrying: job.attempts < job.maxAttempts,
+          });
+        } catch {
+          // Operational logging must not change retry behavior.
+        }
+      }
     }
     return true;
   }

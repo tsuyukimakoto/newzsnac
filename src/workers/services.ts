@@ -5,10 +5,11 @@ import { extractArticle, ItemRepository } from "../collection/normalize.js";
 import type { CollectedItem } from "../collection/types.js";
 import type { AppConfig } from "../config.js";
 import { LmStudioClient, type AnalysisLogger } from "../enrichment/client.js";
-import { EnrichmentService, EnrichmentWorker } from "../enrichment/service.js";
+import { EnrichmentService, EnrichmentWorker, type EnrichmentWorkerObservers } from "../enrichment/service.js";
 import { listLocalModels, selectLoadedModel } from "../enrichment/models.js";
 import type { Fetch } from "../sources/resolver.js";
 import { RecommendationService } from "../recommendation/service.js";
+import type { OperationalLogger } from "../logging.js";
 
 interface SourceSettingsRow {
   base_priority: number;
@@ -17,8 +18,11 @@ interface SourceSettingsRow {
 
 export interface CollectionCycleResult {
   readonly outcomes: readonly CollectionOutcome[];
+  readonly sourcesChecked: number;
   readonly collected: number;
+  readonly newArticles: number;
   readonly failedSources: number;
+  readonly durationMs: number;
 }
 
 export async function runCollectionCycle(
@@ -26,13 +30,16 @@ export async function runCollectionCycle(
   _config: AppConfig,
   fetcher: Fetch = globalThis.fetch,
   clock = () => new Date(),
+  nowMilliseconds = Date.now,
 ): Promise<CollectionCycleResult> {
+  const startedAt = nowMilliseconds();
   const repository = new ItemRepository(database);
   const enrichment = new EnrichmentService(database);
-  const store = async (sourceId: number, items: readonly CollectedItem[]): Promise<void> => {
+  const store = async (sourceId: number, items: readonly CollectedItem[]): Promise<number> => {
     const source = database.prepare(
       "SELECT base_priority, fetch_full_text FROM sources WHERE id = ?",
     ).get(sourceId) as unknown as SourceSettingsRow;
+    let newItems = 0;
     for (const item of items) {
       let extracted: string | undefined;
       if (source.fetch_full_text && /^https?:/i.test(item.url)) {
@@ -42,7 +49,9 @@ export async function runCollectionCycle(
           // A feed body is still useful offline; the failed state is recorded only when neither body exists.
         }
       }
-      const itemId = repository.save(sourceId, item, extracted);
+      const saved = repository.saveWithStatus(sourceId, item, extracted);
+      const itemId = saved.itemId;
+      if (saved.created) newItems += 1;
       const hasContent = Boolean(extracted ?? item.feedContent);
       if (!hasContent) repository.markExtractionFailed(itemId);
       if (hasContent) {
@@ -50,6 +59,7 @@ export async function runCollectionCycle(
         new RecommendationService(database, _config).ensureEmbeddingQueued(itemId);
       }
     }
+    return newItems;
   };
   const coordinator = new CollectionCoordinator(database, [
     new FeedAdapter(fetcher, clock),
@@ -59,8 +69,11 @@ export async function runCollectionCycle(
   const outcomes = await coordinator.collectDue();
   return {
     outcomes,
+    sourcesChecked: outcomes.length,
     collected: outcomes.reduce((sum, outcome) => sum + outcome.collected, 0),
+    newArticles: outcomes.reduce((sum, outcome) => sum + outcome.newItems, 0),
     failedSources: outcomes.filter((outcome) => outcome.error).length,
+    durationMs: Math.max(0, Math.round(nowMilliseconds() - startedAt)),
   };
 }
 
@@ -69,6 +82,9 @@ export async function runAnalysisCycle(
   config: AppConfig,
   fetcher: Fetch = globalThis.fetch,
   maxJobs = 25,
+  observers: EnrichmentWorkerObservers = {},
+  nowMilliseconds = Date.now,
+  analysisLogger?: AnalysisLogger,
 ): Promise<{ readonly processed: number }> {
   let modelId = config.lmStudioModel;
   try {
@@ -83,10 +99,12 @@ export async function runAnalysisCycle(
       fetcher,
       config.analysisMaxCharacters,
       config.lmStudioReasoningEffort,
-      createAnalysisLogger(config.analysisTelemetryEnabled),
+      analysisLogger,
     ),
     `analysis-${process.pid}`,
     new RecommendationService(database, config),
+    observers,
+    nowMilliseconds,
   );
   new RecommendationService(database, config).enqueueMissingEmbeddings(maxJobs);
   let processed = 0;
@@ -98,8 +116,20 @@ export async function runAnalysisCycle(
 
 export function createAnalysisLogger(
   enabled: boolean,
-  writer: (line: string) => unknown = (line) => process.stdout.write(line),
+  logger: Pick<OperationalLogger, "debug">,
 ): AnalysisLogger | undefined {
   if (!enabled) return undefined;
-  return (event) => writer(`${JSON.stringify(event)}\n`);
+  return (event) => logger.debug("analysis.telemetry", {
+    effort: event.effort,
+    maxOutputTokens: event.maxOutputTokens,
+    finishReason: event.finishReason,
+    promptTokens: event.promptTokens,
+    completionTokens: event.completionTokens,
+    reasoningTokens: event.reasoningTokens,
+    contentCharacters: event.contentCharacters,
+    durationMs: event.durationMs,
+    tokensPerSecond: event.tokensPerSecond,
+    validation: event.validation,
+    failure: event.failure,
+  });
 }

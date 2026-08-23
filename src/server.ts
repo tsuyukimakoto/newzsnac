@@ -5,6 +5,7 @@ import { loadConfig } from "./config.js";
 import type { ApplicationOperations } from "./application/operations.js";
 import { createApplicationOperations } from "./application/operations.js";
 import { openDatabase } from "./db/database.js";
+import { createOperationalLogger, errorMessage } from "./logging.js";
 
 const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -105,20 +106,29 @@ export function createAppServer(
 }
 
 if (import.meta.filename === process.argv[1]) {
-  const config = loadConfig();
-  const database = openDatabase(config.databasePath);
-  const server = createAppServer(resolve(process.cwd(), "public"), createApplicationOperations(database, config));
-  server.on("close", () => database.close());
-  const shutdown = (): void => { server.close(); };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-  server.listen(config.port, config.bindHost, () => {
-    const address = server.address();
-    const port = typeof address === "object" && address ? address.port : null;
-    process.stdout.write(
-      `${JSON.stringify({ service: "web", status: "ready", host: config.bindHost, port })}\n`,
-    );
-  });
+  let logger = createOperationalLogger();
+  try {
+    const config = loadConfig();
+    logger = createOperationalLogger({ minimumLevel: config.logLevel });
+    const database = openDatabase(config.databasePath);
+    const server = createAppServer(resolve(process.cwd(), "public"), createApplicationOperations(database, config));
+    server.on("close", () => database.close());
+    server.on("error", (error) => {
+      logger.error("web.fatal", { error: errorMessage(error) });
+      process.exitCode = 1;
+    });
+    const shutdown = (): void => { server.close(); };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+    server.listen(config.port, config.bindHost, () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      logger.info("web.ready", { host: config.bindHost, port });
+    });
+  } catch (error) {
+    logger.error("web.start-failed", { error: errorMessage(error) });
+    process.exitCode = 1;
+  }
 }
 
 async function readJson(request: import("node:http").IncomingMessage): Promise<unknown> {

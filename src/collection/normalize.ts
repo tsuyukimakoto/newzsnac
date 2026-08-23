@@ -42,7 +42,12 @@ export class ItemRepository {
   constructor(private readonly database: DatabaseSync) {}
 
   save(sourceId: number, collected: CollectedItem, extractedContent?: string): number {
+    return this.saveWithStatus(sourceId, collected, extractedContent).itemId;
+  }
+
+  saveWithStatus(sourceId: number, collected: CollectedItem, extractedContent?: string): { readonly itemId: number; readonly created: boolean } {
     const url = normalizeUrl(collected.url);
+    const created = this.database.prepare("SELECT 1 FROM items WHERE canonical_url = ?").get(url) === undefined;
     const timestamp = new Date().toISOString();
     const content = extractedContent ?? collected.feedContent ?? null;
     const metadata = content ? articleContentMetadata(content) : null;
@@ -68,7 +73,7 @@ export class ItemRepository {
       VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(source_id, item_id) DO UPDATE SET raw_metadata_json = excluded.raw_metadata_json
     `).run(sourceId, itemId, collected.externalId, collected.url, collected.title, timestamp, JSON.stringify(collected.rawMetadata ?? {}));
-    return itemId;
+    return { itemId, created };
   }
 
   markExtractionFailed(itemId: number): void {

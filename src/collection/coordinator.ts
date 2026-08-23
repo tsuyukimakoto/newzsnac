@@ -16,6 +16,7 @@ interface SourceRow {
 export interface CollectionOutcome {
   readonly sourceId: number;
   readonly collected: number;
+  readonly newItems: number;
   readonly error?: string;
 }
 
@@ -24,7 +25,7 @@ export class CollectionCoordinator {
     private readonly database: DatabaseSync,
     private readonly adapters: readonly CollectionAdapter[],
     private readonly clock = () => new Date(),
-    private readonly storeItems: (sourceId: number, items: readonly CollectedItem[]) => void | Promise<void> = () => {},
+    private readonly storeItems: (sourceId: number, items: readonly CollectedItem[]) => number | void | Promise<number | void> = () => 0,
   ) {}
 
   async collectDue(): Promise<readonly CollectionOutcome[]> {
@@ -41,7 +42,7 @@ export class CollectionCoordinator {
     for (const row of rows) {
       const adapter = this.adapters.find((candidate) => candidate.kinds.includes(row.kind));
       if (!adapter) {
-        outcomes.push({ sourceId: row.id, collected: 0, error: `No adapter for ${row.kind}` });
+        outcomes.push({ sourceId: row.id, collected: 0, newItems: 0, error: `No adapter for ${row.kind}` });
         continue;
       }
       try {
@@ -55,13 +56,13 @@ export class CollectionCoordinator {
           etag: row.etag ?? undefined,
           lastModified: row.last_modified ?? undefined,
         });
-        await this.storeItems(row.id, result.items);
+        const newItems = await this.storeItems(row.id, result.items) ?? 0;
         this.database.prepare(`
           UPDATE sources SET cursor = ?, etag = ?, last_modified = ?, last_checked_at = ?,
             next_fetch_at = ?, failure_count = 0, last_error = NULL, updated_at = ? WHERE id = ?
         `).run(result.cursor ?? row.cursor, result.etag ?? row.etag, result.lastModified ?? row.last_modified,
           result.checkedAt, result.nextFetchAt, timestamp.toISOString(), row.id);
-        outcomes.push({ sourceId: row.id, collected: result.items.length });
+        outcomes.push({ sourceId: row.id, collected: result.items.length, newItems });
       } catch (error) {
         const failures = row.failure_count + 1;
         const backoffMinutes = Math.min(24 * 60, 2 ** Math.min(failures, 10));
@@ -70,7 +71,7 @@ export class CollectionCoordinator {
         this.database.prepare(`
           UPDATE sources SET failure_count = ?, last_error = ?, next_fetch_at = ?, updated_at = ? WHERE id = ?
         `).run(failures, message, retryAt, timestamp.toISOString(), row.id);
-        outcomes.push({ sourceId: row.id, collected: 0, error: message });
+        outcomes.push({ sourceId: row.id, collected: 0, newItems: 0, error: message });
       }
     }
     return outcomes;

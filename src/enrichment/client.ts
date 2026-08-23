@@ -18,11 +18,17 @@ export interface AnalysisCompletionEvent {
   readonly reasoningTokens: number | null;
   readonly contentCharacters: number;
   readonly durationMs: number;
+  readonly tokensPerSecond?: number;
   readonly validation: "succeeded" | "failed";
   readonly failure?: "request-error" | "http-error" | "missing-content" | "invalid-json" | "invalid-schema";
 }
 
 export type AnalysisLogger = (event: AnalysisCompletionEvent) => void;
+
+export interface AnalysisCompletion {
+  readonly result: AnalysisResult;
+  readonly metrics: AnalysisCompletionEvent;
+}
 
 const ANALYSIS_MAX_OUTPUT_TOKENS = 8_096;
 
@@ -37,6 +43,10 @@ export class LmStudioClient {
   ) {}
 
   async analyze(model: string, title: string, content: string): Promise<AnalysisResult> {
+    return (await this.analyzeWithMetrics(model, title, content)).result;
+  }
+
+  async analyzeWithMetrics(model: string, title: string, content: string): Promise<AnalysisCompletion> {
     const url = new URL(`${this.endpoint.pathname.replace(/\/$/, "")}/chat/completions`, this.endpoint);
     const startedAt = this.now();
     let response: Response;
@@ -80,8 +90,8 @@ export class LmStudioClient {
     }
     try {
       const result = validateAnalysis(parsed);
-      this.logAnalysis(startedAt, body, "succeeded");
-      return result;
+      const metrics = this.logAnalysis(startedAt, body, "succeeded");
+      return { result, metrics };
     } catch (error) {
       this.logAnalysis(startedAt, body, "failed", "invalid-schema");
       throw error;
@@ -93,10 +103,11 @@ export class LmStudioClient {
     body: ChatCompletionBody | null,
     validation: AnalysisCompletionEvent["validation"],
     failure?: AnalysisCompletionEvent["failure"],
-  ): void {
+  ): AnalysisCompletionEvent {
     const choice = body?.choices?.[0];
     const content = choice?.message?.content ?? "";
     const usage = body?.usage;
+    const tokensPerSecond = finiteNonnegativeNumber(body?.stats?.tokens_per_second);
     const event: AnalysisCompletionEvent = {
       service: "analysis-worker",
       event: "analysis-completion",
@@ -108,6 +119,7 @@ export class LmStudioClient {
       reasoningTokens: finiteNumberOrNull(usage?.completion_tokens_details?.reasoning_tokens),
       contentCharacters: [...content].length,
       durationMs: Math.max(0, Math.round(this.now() - startedAt)),
+      ...(tokensPerSecond === undefined ? {} : { tokensPerSecond }),
       validation,
       ...(failure === undefined ? {} : { failure }),
     };
@@ -116,6 +128,7 @@ export class LmStudioClient {
     } catch {
       // Telemetry must not change analysis success or retry behavior.
     }
+    return event;
   }
 
   async translate(model: string, content: string): Promise<string> {
@@ -174,10 +187,15 @@ interface ChatCompletionBody {
     readonly completion_tokens?: unknown;
     readonly completion_tokens_details?: { readonly reasoning_tokens?: unknown };
   };
+  readonly stats?: { readonly tokens_per_second?: unknown };
 }
 
 function finiteNumberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function finiteNonnegativeNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 export function limitAnalysisContent(content: string, maximumCharacters: number): string {

@@ -14,6 +14,7 @@ test("loadConfig returns local-first defaults", () => {
   assert.equal(config.lmStudioModel, "qwen");
   assert.equal(config.lmStudioReasoningEffort, "medium");
   assert.equal(config.analysisTelemetryEnabled, false);
+  assert.equal(config.logLevel, "info");
   assert.equal(config.embeddingModel, null);
   assert.equal(config.embeddingMaxCharacters, 12_000);
   assert.equal(config.embeddingInputVersion, "embedding-v1");
@@ -24,6 +25,16 @@ test("loadConfig returns local-first defaults", () => {
   assert.equal(config.chatContextMaxCharacters, 24_000);
   assert.equal(config.bindHost, "127.0.0.1");
   assert.equal(config.port, 4317);
+});
+
+test("loadConfig validates the minimum log level", () => {
+  for (const level of ["debug", "info", "warn", "error"] as const) {
+    assert.equal(loadConfig({ NEWSZNAC_LOG_LEVEL: level }).logLevel, level);
+  }
+  assert.throws(
+    () => loadConfig({ NEWSZNAC_LOG_LEVEL: "verbose" }),
+    /NEWSZNAC_LOG_LEVEL must be debug, info, warn, or error/,
+  );
 });
 
 test("loadConfig preserves SQLite's in-memory database name", () => {

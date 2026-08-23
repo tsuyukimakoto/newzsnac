@@ -67,7 +67,7 @@ test("explicit interest incrementally creates and removes explainable recommenda
       config.recommendationSimilarityThreshold);
     const client = new LmStudioClient(config.lmStudioUrl, async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { input: string };
-      const vector = body.input.includes("Cooking") ? [0, 1] : body.input.includes("implementation") ? [0.98, 0.2] : [1, 0];
+      const vector = body.input.includes("Cooking") ? [-1, 0] : body.input.includes("implementation") ? [0.98, 0.2] : [1, 0];
       return Response.json({ data: [{ embedding: vector }] });
     });
 
@@ -76,7 +76,10 @@ test("explicit interest incrementally creates and removes explainable recommenda
     reading.setRead(1, true);
     reading.setInterest(1, "interested");
     recommendations.onInterestChanged(1, "interested");
-    const worker = new EnrichmentWorker(database, client, "recommendation-test", recommendations);
+    const completedRecommendations: Array<{ articleId: number; sourceArticleId: number; durationMs: number; score: number }> = [];
+    const worker = new EnrichmentWorker(database, client, "recommendation-test", recommendations, {
+      recommendationCompleted: (event) => completedRecommendations.push(event),
+    });
     const firstRunAt = new Date(Date.now() + 60_000);
     while (await worker.runOne("qwen", "v1", firstRunAt)) { /* drain */ }
 
@@ -86,7 +89,10 @@ test("explicit interest incrementally creates and removes explainable recommenda
     assert.equal(recommended[0]?.recommendation?.sourceTitle, "Local AI architecture");
     assert.ok((recommended[0]?.recommendation?.score ?? 0) > 0.9);
     assert.equal(database.prepare("SELECT count(*) AS count FROM item_recommendations").get()?.count, 2);
-    assert.equal(database.prepare("SELECT score FROM item_recommendations WHERE target_item_id = 3").get()?.score, 0);
+    assert.equal(database.prepare("SELECT score FROM item_recommendations WHERE target_item_id = 3").get()?.score, -1);
+    assert.ok(completedRecommendations.some((event) => event.articleId === 2 && event.sourceArticleId === 1 && event.score > 0.9));
+    assert.ok(completedRecommendations.some((event) => event.articleId === 3 && event.sourceArticleId === 1 && event.score === -1));
+    assert.ok(completedRecommendations.every((event) => event.durationMs >= 0));
     assert.equal(reading.list({ interested: true })[0]?.id, 1);
 
     reading.setInterest(1, null);
@@ -99,6 +105,30 @@ test("explicit interest incrementally creates and removes explainable recommenda
     assert.equal(source?.isSaved, true);
     assert.equal(source?.isRead, true);
     assert.equal(source?.interest, null);
+  } finally { database.close(); }
+});
+
+test("failed recommendation jobs remain retryable and emit no completion event", async () => {
+  const database = openDatabase(":memory:");
+  try {
+    const timestamp = "2026-08-15T00:00:00.000Z";
+    database.prepare(`
+      INSERT INTO jobs(type, payload_json, status, attempts, max_attempts, available_at, created_at, updated_at)
+      VALUES ('recommendation', '{}', 'pending', 0, 5, ?, ?, ?)
+    `).run(timestamp, timestamp, timestamp);
+    const config = loadConfig({ NEWSZNAC_EMBEDDING_MODEL: "embed-model" });
+    const events: unknown[] = [];
+    const worker = new EnrichmentWorker(
+      database,
+      new LmStudioClient(config.lmStudioUrl, async () => { throw new Error("unexpected request"); }),
+      "failed-recommendation",
+      new RecommendationService(database, config),
+      { recommendationCompleted: (event) => events.push(event) },
+    );
+
+    assert.equal(await worker.runOne("qwen", "v1", new Date(timestamp)), true);
+    assert.deepEqual(events, []);
+    assert.equal(database.prepare("SELECT status FROM jobs").get()?.status, "retry_wait");
   } finally { database.close(); }
 });
 

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { parseEnv } from "node:util";
+import type { LogLevel } from "./logging.js";
 
 export interface AppConfig {
   readonly databasePath: string;
@@ -9,6 +10,7 @@ export interface AppConfig {
   readonly lmStudioModel: string;
   readonly lmStudioReasoningEffort: LmStudioReasoningEffort;
   readonly analysisTelemetryEnabled: boolean;
+  readonly logLevel: LogLevel;
   readonly embeddingModel: string | null;
   readonly embeddingMaxCharacters: number;
   readonly embeddingInputVersion: string;
@@ -32,6 +34,7 @@ export const CONFIG_DEFAULTS = Object.freeze({
   lmStudioModel: "qwen",
   lmStudioReasoningEffort: "medium" as const,
   analysisTelemetryEnabled: false,
+  logLevel: "info" as const,
   embeddingModel: null,
   embeddingMaxCharacters: 12_000,
   embeddingInputVersion: "embedding-v1",
@@ -100,6 +103,12 @@ function parseBoolean(value: string | undefined, fallback: boolean, name: string
   throw new Error(`${name} must be true or false`);
 }
 
+function parseLogLevel(value: string | undefined): LogLevel {
+  const actual = value ?? CONFIG_DEFAULTS.logLevel;
+  if (actual === "debug" || actual === "info" || actual === "warn" || actual === "error") return actual;
+  throw new Error("NEWSZNAC_LOG_LEVEL must be debug, info, warn, or error");
+}
+
 function integerInRange(value: string | undefined, fallback: number, name: string, minimum: number, maximum: number): number {
   const parsed = value === undefined ? fallback : Number(value);
   if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
@@ -152,6 +161,7 @@ export function loadConfig(
       CONFIG_DEFAULTS.analysisTelemetryEnabled,
       "NEWSZNAC_ANALYSIS_TELEMETRY_ENABLED",
     ),
+    logLevel: parseLogLevel(actualEnvironment.NEWSZNAC_LOG_LEVEL),
     embeddingModel: optionalNonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_MODEL, "NEWSZNAC_EMBEDDING_MODEL"),
     embeddingMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_EMBEDDING_MAX_CHARACTERS, CONFIG_DEFAULTS.embeddingMaxCharacters, "NEWSZNAC_EMBEDDING_MAX_CHARACTERS", 1_000, 100_000),
     embeddingInputVersion: nonEmpty(actualEnvironment.NEWSZNAC_EMBEDDING_INPUT_VERSION, CONFIG_DEFAULTS.embeddingInputVersion, "NEWSZNAC_EMBEDDING_INPUT_VERSION"),
