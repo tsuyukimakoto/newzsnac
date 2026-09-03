@@ -135,7 +135,7 @@ export class ReadingService {
 
   setInterest(itemId: number, interest: Interest): void { this.upsertState(itemId, { interest }); }
 
-  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; readLater?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean; processingState?: ProcessingState } = {}): readonly ArticleListItem[] {
+  list(options: { sort?: SortOrder; baselineAt?: Date; timeBudgetMinutes?: number; sourceId?: number; saved?: boolean; readLater?: boolean; interested?: boolean; recommended?: boolean; unread?: boolean; processingState?: ProcessingState; limit?: number; offset?: number } = {}): readonly ArticleListItem[] {
     const sort = options.sort ?? "newest";
     const order = {
       newest: "i.published_at DESC, i.id DESC",
@@ -173,10 +173,11 @@ export class ReadingService {
       WHERE ${conditions.join(" AND ")}
       GROUP BY i.id
       ORDER BY ${options.recommended ? "r.score DESC, i.published_at DESC, i.id DESC" : order}
+      LIMIT ? OFFSET ?
     `).all(this.recommendationModel, this.embeddingInputVersion, this.recommendationSimilarityThreshold,
       baseline, baseline, sourceId, sourceId,
       Number(options.saved ?? false), Number(options.readLater ?? false), Number(options.interested ?? false), Number(options.recommended ?? false), Number(options.unread ?? false),
-      options.processingState ?? "ready") as unknown as ArticleRow[];
+      options.processingState ?? "ready", options.limit ?? -1, options.offset ?? 0) as unknown as ArticleRow[];
     const articles = rows.map(mapArticle);
     if (options.timeBudgetMinutes === undefined) return articles;
     let remaining = options.timeBudgetMinutes;
@@ -187,7 +188,7 @@ export class ReadingService {
     });
   }
 
-  search(query: string, options: { unread?: boolean; processingState?: ProcessingState } = {}): readonly ArticleListItem[] {
+  search(query: string, options: { unread?: boolean; processingState?: ProcessingState; limit?: number; offset?: number } = {}): readonly ArticleListItem[] {
     if (!query.trim()) return [];
     const rows = this.database.prepare(`
       WITH matches AS (
@@ -221,8 +222,10 @@ export class ReadingService {
       WHERE (? = 0 OR coalesce(u.is_read, 0) = 0)
         AND ${processingStateSql} = ?
       GROUP BY i.id ORDER BY i.id DESC
+      LIMIT ? OFFSET ?
     `).all(query, this.recommendationModel, this.embeddingInputVersion,
-      this.recommendationSimilarityThreshold, Number(options.unread ?? false), options.processingState ?? "ready") as unknown as ArticleRow[];
+      this.recommendationSimilarityThreshold, Number(options.unread ?? false), options.processingState ?? "ready",
+      options.limit ?? -1, options.offset ?? 0) as unknown as ArticleRow[];
     return rows.map(mapArticle);
   }
 

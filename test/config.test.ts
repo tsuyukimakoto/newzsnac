@@ -115,10 +115,14 @@ test("loadConfig validates the analysis telemetry toggle", () => {
   );
 });
 
-test("loadConfig rejects a public bind address", () => {
+test("loadConfig accepts an IPv4 wildcard bind for LAN access", () => {
+  assert.equal(loadConfig({ NEWSZNAC_HOST: "0.0.0.0" }).bindHost, "0.0.0.0");
+});
+
+test("loadConfig rejects an unsupported bind host", () => {
   assert.throws(
-    () => loadConfig({ NEWSZNAC_HOST: "0.0.0.0" }),
-    /must be a loopback address/,
+    () => loadConfig({ NEWSZNAC_HOST: "example.com" }),
+    /must be 127\.0\.0\.1, ::1, or 0\.0\.0\.0/,
   );
 });
 

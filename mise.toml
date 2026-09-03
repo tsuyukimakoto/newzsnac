@@ -20,6 +20,11 @@ description = "Build and start the web server and both workers"
 depends = ["build"]
 run = "node dist/src/main.js"
 
+[tasks."start:lan"]
+description = "Build and start the web server for access from the local network"
+depends = ["build"]
+run = "NEWSZNAC_HOST=0.0.0.0 node dist/src/main.js"
+
 [tasks.stop]
 description = "Build and stop the running web server and both workers"
 depends = ["build"]

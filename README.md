@@ -40,6 +40,20 @@ mise run start
 - 10秒ごとに登録済み情報源を確認する収集ワーカー
 - 2秒ごとに分析・翻訳ジョブを確認する分析ワーカー
 
+同じLAN内の端末から開く場合は、すべてのIPv4ネットワークインターフェースで待ち受ける起動タスクを使います。
+
+```sh
+mise run start:lan
+```
+
+起動ログの `web.ready` に、別の端末から開けるURLが表示されます。ネットワークインターフェースが複数ある場合は、URLも複数表示されます。
+
+```text
+[08-26 12:34:56] INFO web.ready host="0.0.0.0" port=4317 urls="http://192.168.1.20:4317"
+```
+
+表示されたURLを同じLAN内の端末で開きます。この起動方法では認証なしで記事、設定、操作APIへアクセスできるため、信頼できるLAN内だけで使用してください。通常の `mise run start` は引き続き `127.0.0.1` だけで待ち受けます。
+
 起動完了、収集、記事分析、推薦など、アプリケーションの動作を把握できる出来事は、起動したターミナルへ日時付きのINFOログとして出力します。
 
 ```text
@@ -155,7 +169,7 @@ NEWSZNAC_EMBEDDING_MODEL=text-embedding-nomic-embed-text-v1.5
 | `NEWSZNAC_DATABASE_PATH` | `data/newzsnac.sqlite` | SQLiteファイル |
 | `NEWSZNAC_PID_PATH` | `data/newzsnac.pid` | `mise run start`で起動した親プロセスの実行記録。`mise run stop`も同じ値を使用 |
 | `NEWSZNAC_PORT` | `4317` | Web画面のポート |
-| `NEWSZNAC_HOST` | `127.0.0.1` | Web画面の待受先。ループバックのみ |
+| `NEWSZNAC_HOST` | `127.0.0.1` | Web画面の待受先。LAN公開時は `0.0.0.0` |
 | `NEWSZNAC_LM_STUDIO_URL` | `http://127.0.0.1:1234/v1` | LM StudioのOpenAI互換API |
 | `NEWSZNAC_LM_STUDIO_MODEL` | `qwen` | 分析、翻訳、記事問答に使うモデルID |
 | `NEWSZNAC_LM_STUDIO_REASONING_EFFORT` | `medium` | 記事分析、全文翻訳、記事問答の推論量。`none`、`low`、`medium`、`high` |

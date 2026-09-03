@@ -19,11 +19,13 @@ export interface AppConfig {
   readonly analysisMaxCharacters: number;
   readonly translationPromptVersion: string;
   readonly chatContextMaxCharacters: number;
-  readonly bindHost: "127.0.0.1" | "::1";
+  readonly bindHost: BindHost;
   readonly port: number;
 }
 
 export type LmStudioReasoningEffort = "none" | "low" | "medium" | "high";
+
+export type BindHost = "127.0.0.1" | "::1" | "0.0.0.0";
 
 export type ConfigEnvironment = Readonly<Record<string, string | undefined>>;
 
@@ -59,12 +61,13 @@ function parsePort(value: string | undefined): number {
   return port;
 }
 
-function parseLoopbackHost(value: string | undefined): "127.0.0.1" | "::1" {
+function parseBindHost(value: string | undefined): BindHost {
   if (value === undefined || value === "127.0.0.1" || value === "localhost") {
     return CONFIG_DEFAULTS.bindHost;
   }
   if (value === "::1") return "::1";
-  throw new Error("NEWSZNAC_HOST must be a loopback address");
+  if (value === "0.0.0.0") return "0.0.0.0";
+  throw new Error("NEWSZNAC_HOST must be 127.0.0.1, ::1, or 0.0.0.0");
 }
 
 function parseLmStudioUrl(value: string | undefined): URL {
@@ -170,7 +173,7 @@ export function loadConfig(
     analysisMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_ANALYSIS_MAX_CHARACTERS, CONFIG_DEFAULTS.analysisMaxCharacters, "NEWSZNAC_ANALYSIS_MAX_CHARACTERS", 1_000, 100_000),
     translationPromptVersion: nonEmpty(actualEnvironment.NEWSZNAC_TRANSLATION_PROMPT_VERSION, CONFIG_DEFAULTS.translationPromptVersion, "NEWSZNAC_TRANSLATION_PROMPT_VERSION"),
     chatContextMaxCharacters: integerInRange(actualEnvironment.NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS, CONFIG_DEFAULTS.chatContextMaxCharacters, "NEWSZNAC_CHAT_CONTEXT_MAX_CHARACTERS", 1_000, 100_000),
-    bindHost: parseLoopbackHost(actualEnvironment.NEWSZNAC_HOST),
+    bindHost: parseBindHost(actualEnvironment.NEWSZNAC_HOST),
     port: parsePort(actualEnvironment.NEWSZNAC_PORT),
   };
 }
