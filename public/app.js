@@ -1,8 +1,12 @@
 const ROW_HEIGHT = 116;
+const PAGE_SIZE = 10;
+const MAX_RETAINED_ITEMS = 20;
+const LOAD_AHEAD_ROWS = 4;
 const storedHideRead = localStorage.getItem("newzsnac.hideRead");
 const state = {
   items: [], selected: 0, mode: "fast", start: 0, end: 0,
   loading: false, loadGeneration: 0, navigating: false, filter: { type: "all" }, view: "reader", total: null,
+  windowOffset: 0, nextCursor: null, activeQuery: "", pageLoad: null,
   hideRead: storedHideRead !== "false",
   chats: new Map(),
   retrying: new Set(), retryErrors: new Map(),
@@ -297,6 +301,7 @@ function select(index) {
 }
 
 async function moveFocus(index) {
+  if (state.pageLoad) await state.pageLoad;
   if (state.navigating || state.items.length === 0) return;
   const targetIndex = Math.max(0, Math.min(state.items.length - 1, index));
   if (targetIndex === state.selected) return;
@@ -304,6 +309,7 @@ async function moveFocus(index) {
   const targetId = state.items[targetIndex]?.id;
   if (!current || !targetId) return;
   state.navigating = true;
+  select(targetIndex);
   document.querySelector("#stream-error").textContent = "";
   try {
     if (!current.isRead && current.processingState === "ready") {
@@ -317,6 +323,8 @@ async function moveFocus(index) {
     else select(targetIndex);
   } catch (error) {
     current.isRead = false;
+    const currentIndex = state.items.findIndex((item) => item.id === current.id);
+    if (currentIndex >= 0) select(currentIndex);
     document.querySelector("#stream-error").textContent = `既読状態を更新できませんでした: ${error.message}`;
     renderList();
   } finally {
@@ -326,6 +334,7 @@ async function moveFocus(index) {
 
 function pushHistory(history, item) {
   if (history.at(-1)?.id !== item.id) history.push(item);
+  if (history.length > MAX_RETAINED_ITEMS) history.splice(0, history.length - MAX_RETAINED_ITEMS);
 }
 
 function showHistoryItem(item) {
@@ -399,7 +408,7 @@ async function consumeReadLaterAndMoveForward() {
       renderReader();
     }
     document.querySelector("#empty").hidden = state.items.length > 0;
-    document.querySelector("#visible-count").textContent = `${state.items.filter((item) => item.isReadLater).length}件を表示`;
+    updateLoadedCount();
     void loadDashboard();
   } catch (error) {
     document.querySelector("#stream-error").textContent = `あとで読むから除外できませんでした: ${error.message}`;
@@ -417,7 +426,10 @@ async function moveForward() {
   if (state.navigating || state.items.length === 0) return;
   const target = state.forwardHistory.at(-1);
   if (!target) {
-    await moveFocus(state.selected + 1);
+    const selectedId = state.items[state.selected]?.id;
+    if (state.selected >= state.items.length - 1 && state.nextCursor !== null) await loadNextItems();
+    const currentIndex = state.items.findIndex((item) => item.id === selectedId);
+    await moveFocus((currentIndex >= 0 ? currentIndex : state.selected) + 1);
     return;
   }
   const current = state.items[state.selected];
@@ -461,6 +473,78 @@ async function executeOperation(operation, input) {
   return result.data;
 }
 
+function itemsUrl(query, cursor, limit) {
+  const url = new URL("/api/items", location.origin);
+  if (query) url.searchParams.set("q", query);
+  if (["pending", "failed", "analysis_failed"].includes(state.filter.type)) url.searchParams.set("status", state.filter.type);
+  if (!query && state.filter.type === "source") url.searchParams.set("sourceId", state.filter.id);
+  if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
+  if (!query && state.filter.type === "readLater") url.searchParams.set("readLater", "true");
+  if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
+  if (!query && state.filter.type === "recommended") url.searchParams.set("recommended", "true");
+  if (state.hideRead && state.filter.type !== "readLater") url.searchParams.set("unread", "true");
+  if (cursor > 0) url.searchParams.set("cursor", String(cursor));
+  if (limit !== PAGE_SIZE) url.searchParams.set("limit", String(limit));
+  return url;
+}
+
+function updateLoadedCount() {
+  document.querySelector("#visible-count").textContent = `${state.items.length}件を読込`;
+}
+
+function trimLoadedItems() {
+  const overflow = state.items.length - MAX_RETAINED_ITEMS;
+  if (overflow <= 0) return;
+  const selectedId = state.items[state.selected]?.id;
+  state.items.splice(0, overflow);
+  state.windowOffset += overflow;
+  list.scrollTop = Math.max(0, list.scrollTop - overflow * ROW_HEIGHT);
+  const selectedIndex = state.items.findIndex((item) => item.id === selectedId);
+  state.selected = selectedIndex >= 0 ? selectedIndex : 0;
+  const retainedIds = new Set([
+    ...state.items.map((item) => item.id),
+    ...state.backHistory.map((item) => item.id),
+    ...state.forwardHistory.map((item) => item.id),
+  ]);
+  for (const id of state.chats.keys()) {
+    if (!retainedIds.has(id)) state.chats.delete(id);
+  }
+}
+
+function loadNextItems() {
+  if (state.pageLoad) return state.pageLoad;
+  if (state.loading || state.nextCursor === null) return Promise.resolve();
+  const pageLoad = loadNextItemsPage();
+  state.pageLoad = pageLoad;
+  return pageLoad.finally(() => {
+    if (state.pageLoad === pageLoad) state.pageLoad = null;
+  });
+}
+
+async function loadNextItemsPage() {
+  const generation = state.loadGeneration;
+  const cursor = state.nextCursor;
+  state.loading = true;
+  try {
+    const response = await fetch(itemsUrl(state.activeQuery, cursor, PAGE_SIZE));
+    const data = await response.json();
+    if (generation !== state.loadGeneration) return;
+    const knownIds = new Set(state.items.map((item) => item.id));
+    const appended = (data.items || []).filter((item) => !knownIds.has(item.id));
+    state.items.push(...appended);
+    state.nextCursor = data.nextCursor;
+    trimLoadedItems();
+    document.querySelector("#empty").hidden = state.items.length > 0;
+    updateLoadedCount();
+    renderList();
+    renderReader();
+  } catch (error) {
+    document.querySelector("#stream-error").textContent = `続きを読み込めませんでした: ${error.message}`;
+  } finally {
+    if (generation === state.loadGeneration) state.loading = false;
+  }
+}
+
 async function loadItems(query = "", preservePosition = false, preferredId = null) {
   if (!preservePosition && preferredId === null) {
     state.backHistory = [];
@@ -469,16 +553,9 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
   const generation = ++state.loadGeneration;
   state.loading = true;
   try {
-    const url = new URL("/api/items", location.origin);
-    if (query) url.searchParams.set("q", query);
-    if (["pending", "failed", "analysis_failed"].includes(state.filter.type)) url.searchParams.set("status", state.filter.type);
-    if (!query && state.filter.type === "source") url.searchParams.set("sourceId", state.filter.id);
-    if (!query && state.filter.type === "saved") url.searchParams.set("saved", "true");
-    if (!query && state.filter.type === "readLater") url.searchParams.set("readLater", "true");
-    if (!query && state.filter.type === "interested") url.searchParams.set("interested", "true");
-    if (!query && state.filter.type === "recommended") url.searchParams.set("recommended", "true");
-    if (state.hideRead && state.filter.type !== "readLater") url.searchParams.set("unread", "true");
-    const response = await fetch(url);
+    const requestedOffset = preservePosition ? state.windowOffset : 0;
+    const requestedLimit = preservePosition ? Math.max(PAGE_SIZE, Math.min(MAX_RETAINED_ITEMS, state.items.length)) : PAGE_SIZE;
+    const response = await fetch(itemsUrl(query, requestedOffset, requestedLimit));
     const data = await response.json();
     if (generation !== state.loadGeneration) return;
     const selectedItem = preservePosition ? state.items[state.selected] : null;
@@ -499,6 +576,10 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
     } else {
       state.items = refreshedItems;
     }
+    state.activeQuery = query;
+    state.windowOffset = requestedOffset;
+    state.nextCursor = data.nextCursor;
+    trimLoadedItems();
     if (state.filter.type === "readLater") {
       const activeIds = new Set(refreshedItems.filter((item) => item.isReadLater).map((item) => item.id));
       for (const id of activeIds) {
@@ -513,7 +594,7 @@ async function loadItems(query = "", preservePosition = false, preferredId = nul
     state.selected = selectedIndex >= 0 ? selectedIndex : 0;
     list.scrollTop = preservePosition ? scrollTop : 0;
     document.querySelector("#empty").hidden = state.items.length > 0;
-    document.querySelector("#visible-count").textContent = `${state.items.length}件を表示`;
+    updateLoadedCount();
     renderStreamContext();
     renderList();
     renderReader();
@@ -653,7 +734,11 @@ async function removeReadLaterBatch() {
   }
 }
 
-list.addEventListener("scroll", () => requestAnimationFrame(renderList));
+list.addEventListener("scroll", () => requestAnimationFrame(() => {
+  renderList();
+  const remaining = list.scrollHeight - list.clientHeight - list.scrollTop;
+  if (remaining <= LOAD_AHEAD_ROWS * ROW_HEIGHT) void loadNextItems();
+}));
 function isTextEntryKey(event) {
   if (event.isComposing || event.key === "Process" || event.keyCode === 229) return true;
   const selector = "input,textarea,select,[contenteditable=true]";

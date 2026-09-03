@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { networkInterfaces } from "node:os";
 import { extname, resolve } from "node:path";
 import { loadConfig } from "./config.js";
 import type { ApplicationOperations } from "./application/operations.js";
@@ -11,6 +12,27 @@ const CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8", ".svg": "image/svg+xml",
 };
+
+interface NetworkAddress {
+  readonly address: string;
+  readonly family: string | number;
+  readonly internal: boolean;
+}
+
+type NetworkAddressMap = Readonly<Record<string, readonly NetworkAddress[] | undefined>>;
+
+export function lanAccessUrls(
+  port: number,
+  interfaces: NetworkAddressMap = networkInterfaces(),
+): string[] {
+  const addresses = Object.values(interfaces)
+    .flatMap((entries) => entries ?? [])
+    .filter((entry) => !entry.internal && (entry.family === "IPv4" || entry.family === 4))
+    .map((entry) => entry.address);
+  return [...new Set(addresses)]
+    .sort((left, right) => left.localeCompare(right))
+    .map((address) => `http://${address}:${port}`);
+}
 
 export function createAppServer(
   publicDirectory = resolve(process.cwd(), "public"),
@@ -25,15 +47,23 @@ export function createAppServer(
 
     const requestUrl = new URL(request.url ?? "/", "http://localhost");
     if (request.method === "GET" && requestUrl.pathname === "/api/items") {
+      const requestedLimit = Number(requestUrl.searchParams.get("limit") ?? 10);
+      const limit = Number.isSafeInteger(requestedLimit) ? Math.min(50, Math.max(1, requestedLimit)) : 10;
+      const requestedCursor = Number(requestUrl.searchParams.get("cursor") ?? 0);
+      const offset = Number.isSafeInteger(requestedCursor) ? Math.max(0, requestedCursor) : 0;
       const result = operations
         ? await operations.execute(requestUrl.searchParams.has("q") ? "article.search" : "article.list",
           requestUrl.searchParams.has("q")
             ? {
                 query: requestUrl.searchParams.get("q"),
+                limit: limit + 1,
+                offset,
                 ...(requestUrl.searchParams.get("unread") === "true" ? { unread: true } : {}),
                 ...(requestUrl.searchParams.has("status") ? { processingState: requestUrl.searchParams.get("status") } : {}),
               }
             : {
+                limit: limit + 1,
+                offset,
                 ...(requestUrl.searchParams.has("sourceId") ? { sourceId: Number(requestUrl.searchParams.get("sourceId")) } : {}),
                 ...(requestUrl.searchParams.get("saved") === "true" ? { saved: true } : {}),
                 ...(requestUrl.searchParams.get("readLater") === "true" ? { readLater: true } : {}),
@@ -43,8 +73,14 @@ export function createAppServer(
                 ...(requestUrl.searchParams.has("status") ? { processingState: requestUrl.searchParams.get("status") } : {}),
               }, "web")
         : { ok: true as const, data: [] };
+      const resultItems = result.ok && Array.isArray(result.data) ? result.data : [];
+      const hasMore = resultItems.length > limit;
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ items: result.ok ? result.data : [], nextCursor: null, newCount: 0 }));
+      response.end(JSON.stringify({
+        items: resultItems.slice(0, limit),
+        nextCursor: hasMore ? offset + limit : null,
+        newCount: 0,
+      }));
       return;
     }
     if (request.method === "GET" && requestUrl.pathname === "/api/dashboard") {
@@ -123,7 +159,10 @@ if (import.meta.filename === process.argv[1]) {
     server.listen(config.port, config.bindHost, () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : null;
-      logger.info("web.ready", { host: config.bindHost, port });
+      const urls = config.bindHost === "0.0.0.0" && port !== null
+        ? lanAccessUrls(port).join(",")
+        : undefined;
+      logger.info("web.ready", { host: config.bindHost, port, urls: urls || undefined });
     });
   } catch (error) {
     logger.error("web.start-failed", { error: errorMessage(error) });

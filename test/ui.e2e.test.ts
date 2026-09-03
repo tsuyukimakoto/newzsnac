@@ -236,7 +236,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
   assert.equal(await page.locator(".article-card h2", { hasText: "First" }).count(), 0);
-  assert.equal(await page.locator("#visible-count").textContent(), "29件を表示");
+  assert.equal(await page.locator("#visible-count").textContent(), "20件を読込");
   assert.equal(await page.evaluate(() => localStorage.getItem("newzsnac.hideRead")), "true");
   await page.locator("#article-list").focus();
   await Promise.all([
@@ -259,7 +259,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   ]);
   assert.equal(database.prepare("SELECT is_read FROM item_user_states WHERE item_id=2").get()?.is_read, 0);
   await Promise.all([
-    page.waitForResponse((response) => response.url().endsWith("/api/items")),
+    page.waitForResponse((response) => response.url().includes("/api/items") && !response.url().includes("unread=true")),
     page.locator("#hide-read").uncheck(),
   ]);
   assert.equal(await page.locator(".article-card.selected h2").textContent(), "Second");
@@ -281,7 +281,7 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.equal(await page.locator("#chat-question").inputValue(), "日本語入力中 j k b / s i u t o");
   assert.equal(database.prepare("SELECT is_read_later FROM item_user_states WHERE item_id=2").get()?.is_read_later ?? 0, 0);
   await Promise.all([
-    page.waitForResponse((response) => response.url().endsWith("/api/items")),
+    page.waitForResponse((response) => response.url().includes("/api/items") && !response.url().includes("unread=true")),
     page.locator("#hide-read").evaluate((element) => {
       (element as HTMLInputElement).checked = false;
       element.dispatchEvent(new Event("change", { bubbles: true }));
@@ -373,6 +373,44 @@ test("keyboard-only reading, translation, saving, unread toggle, and search", as
   assert.match(await page.locator("#article-chat .chat-error").textContent() ?? "", /HTTP 503/);
   assert.equal(await page.locator(".reader-content h1").textContent(), "Second");
   assert.equal(database.prepare("SELECT count(*) AS count FROM article_chat_messages WHERE item_id=2").get()?.count, 0);
+
+  if (await page.locator("#hide-read").isChecked()) {
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/items") && !response.url().includes("unread=true")),
+      page.locator("#hide-read").uncheck(),
+    ]);
+  }
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("cursor=10")),
+    page.locator("#article-list").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    }),
+  ]);
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("cursor=20")),
+    page.locator("#article-list").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    }),
+  ]);
+  assert.equal(await page.locator("#visible-count").textContent(), "20件を読込");
+  assert.equal(await page.locator("#article-spacer").evaluate((element) => element.getBoundingClientRect().height), 20 * 116);
+  assert.equal(await page.locator(".article-card", { hasText: "First" }).count(), 0);
+  await Promise.all([
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
+    page.locator("#hide-read").check(),
+  ]);
+  const titlesBeforePagedAdvance = await page.locator(".article-card h2").allTextContents();
+  assert.ok(titlesBeforePagedAdvance.length >= 2);
+  await page.locator("#article-list").focus();
+  await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/operations/article.read")),
+    page.waitForResponse((response) => response.url().includes("/api/items?unread=true")),
+    page.keyboard.press("j"),
+  ]);
+  assert.equal(await page.locator(".article-card").first().locator("h2").textContent(), titlesBeforePagedAdvance[1]);
+  assert.equal(await page.locator(".article-card.selected h2").textContent(), titlesBeforePagedAdvance[1]);
 
   await page.locator(".discover").click();
   await page.locator("#source-input").fill("https://example.com/feed.xml");

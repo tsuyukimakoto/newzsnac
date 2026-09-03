@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { lanAccessUrls } from "../src/server.js";
 
 const distRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const sourceRoot = resolve(distRoot, "src");
@@ -31,10 +32,25 @@ test("CLI JSON output is not suppressed by the application log level", () => {
 });
 
 test("caught startup failures use the common ERROR logger", () => {
-  const result = run("server.js", [], { NEWSZNAC_HOST: "0.0.0.0", NEWSZNAC_LOG_LEVEL: "error" });
+  const result = run("server.js", [], { NEWSZNAC_HOST: "example.com", NEWSZNAC_LOG_LEVEL: "error" });
   assert.equal(result.status, 1);
   assert.equal(result.stdout, "");
-  assert.match(result.stderr, /^\[\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ERROR web\.start-failed error="NEWSZNAC_HOST must be a loopback address"\n$/);
+  assert.match(result.stderr, /^\[\d{2}-\d{2} \d{2}:\d{2}:\d{2}\] ERROR web\.start-failed error="NEWSZNAC_HOST must be 127\.0\.0\.1, ::1, or 0\.0\.0\.0"\n$/);
+});
+
+test("LAN access URLs include each external IPv4 address once", () => {
+  assert.deepEqual(lanAccessUrls(4317, {
+    lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
+    en0: [
+      { address: "192.168.1.20", family: "IPv4", internal: false },
+      { address: "fe80::1", family: "IPv6", internal: false },
+    ],
+    bridge0: [{ address: "192.168.1.20", family: 4, internal: false }],
+    utun0: [{ address: "10.0.0.8", family: "IPv4", internal: false }],
+  }), [
+    "http://10.0.0.8:4317",
+    "http://192.168.1.20:4317",
+  ]);
 });
 
 for (const worker of ["collection", "analysis"] as const) {
@@ -62,6 +78,31 @@ test("web application starts on loopback and reports readiness", async (context)
     }),
   ])) as [Buffer];
   assert.match(chunk.toString(), /INFO web\.ready host="127\.0\.0\.1" port=\d+/);
+});
+
+test("web application can bind every IPv4 interface for LAN access", async (context) => {
+  const child = spawn(process.execPath, [resolve(sourceRoot, "server.js")], {
+    env: {
+      ...process.env,
+      NEWSZNAC_HOST: "0.0.0.0",
+      NEWSZNAC_PORT: "0",
+      NEWSZNAC_DATABASE_PATH: ":memory:",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  context.after(() => child.kill());
+
+  const [chunk] = (await Promise.race([
+    once(child.stdout, "data"),
+    once(child, "exit").then(([code]) => {
+      throw new Error(`web process exited before readiness (code ${String(code)})`);
+    }),
+  ])) as [Buffer];
+  const output = chunk.toString();
+  assert.match(output, /INFO web\.ready host="0\.0\.0\.0" port=\d+/);
+  if (lanAccessUrls(4317).length > 0) {
+    assert.match(output, / urls="http:\/\/[^:"]+:\d+(?:,http:\/\/[^:"]+:\d+)*"/);
+  }
 });
 
 test("normal start supervises web, collection, and analysis processes on one SQLite file", async (context) => {

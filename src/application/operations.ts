@@ -112,6 +112,8 @@ export class ApplicationOperations {
         const recommended = optionalBoolean(input, "recommended");
         const unread = optionalBoolean(input, "unread");
         const processingState = optionalProcessingState(input, "processingState");
+        const limit = optionalBoundedInteger(input, "limit", 1, 51);
+        const offset = optionalBoundedInteger(input, "offset", 0, Number.MAX_SAFE_INTEGER);
         return this.reading.list({
           ...(sourceId === undefined ? {} : { sourceId }),
           ...(saved === undefined ? {} : { saved }),
@@ -120,14 +122,20 @@ export class ApplicationOperations {
           ...(recommended === undefined ? {} : { recommended }),
           ...(unread === undefined ? {} : { unread }),
           ...(processingState === undefined ? {} : { processingState }),
+          ...(limit === undefined ? {} : { limit }),
+          ...(offset === undefined ? {} : { offset }),
         });
       }
       case "article.search": {
         const unread = optionalBoolean(input, "unread");
         const processingState = optionalProcessingState(input, "processingState");
+        const limit = optionalBoundedInteger(input, "limit", 1, 51);
+        const offset = optionalBoundedInteger(input, "offset", 0, Number.MAX_SAFE_INTEGER);
         return this.reading.search(text(input, "query"), {
           ...(unread === undefined ? {} : { unread }),
           ...(processingState === undefined ? {} : { processingState }),
+          ...(limit === undefined ? {} : { limit }),
+          ...(offset === undefined ? {} : { offset }),
         });
       }
       case "article.save": {
@@ -313,6 +321,15 @@ function boolean(input: Record<string, unknown>, key: string): boolean {
 function optionalInteger(input: Record<string, unknown>, key: string): number | undefined {
   if (input[key] === undefined) return undefined;
   return integer(input, key);
+}
+
+function optionalBoundedInteger(input: Record<string, unknown>, key: string, minimum: number, maximum: number): number | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (!Number.isSafeInteger(value) || Number(value) < minimum || Number(value) > maximum) {
+    throw new Error(`${key} must be an integer from ${minimum} through ${maximum}`);
+  }
+  return Number(value);
 }
 
 function integerArray(input: Record<string, unknown>, key: string, maximumLength: number): number[] {

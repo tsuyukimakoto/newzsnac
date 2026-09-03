@@ -101,6 +101,19 @@ test("search, smart views, and time budgets work without LM Studio or external n
   } finally { database.close(); }
 });
 
+test("article lists and search can be fetched in bounded pages", () => {
+  const database = openDatabase(":memory:");
+  try {
+    for (let id = 1; id <= 25; id += 1) {
+      insertItem(database, id, new Date(Date.parse("2026-08-15T00:00:00Z") + id * 1_000).toISOString(), 1);
+    }
+    const reading = new ReadingService(database);
+    assert.deepEqual(reading.list({ limit: 10, offset: 0 }).map((item) => item.id), [25, 24, 23, 22, 21, 20, 19, 18, 17, 16]);
+    assert.deepEqual(reading.list({ limit: 10, offset: 10 }).map((item) => item.id), [15, 14, 13, 12, 11, 10, 9, 8, 7, 6]);
+    assert.deepEqual(reading.search("searchable", { limit: 5, offset: 20 }).map((item) => item.id), [5, 4, 3, 2, 1]);
+  } finally { database.close(); }
+});
+
 test("article list exposes publication time and structured key points", () => {
   const database = openDatabase(":memory:");
   try {
